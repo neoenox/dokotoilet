@@ -15,6 +15,10 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
+      # B: data/community.json はgit運用の正本。untrackedに戻っていないか監視する
+      - run: git ls-files data/ | grep -q "data/community.json"
       - run: bun run lint
       - run: bun run test
       - run: bun run build
+      # G: 本番バンドルの最小E2Eスモーク（health/community/admin-guard/osm検証）
+      - run: bun run smoke

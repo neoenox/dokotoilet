@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Suspense, lazy } from 'react';
 import {
   ToiletFacility,
   FilterState,
@@ -33,7 +33,13 @@ import {
 import {
   applyDeltaToSeeds,
   emptyDelta,
+  enqueuePendingReview,
+  enqueuePendingVote,
   extractDelta,
+  loadPendingReviews,
+  loadPendingVotes,
+  removePendingReview,
+  removePendingVote,
   LOCAL_DELTA_KEY,
   LEGACY_TOILETS_V2_KEY,
   LEGACY_TOILETS_V3_KEY,
@@ -50,10 +56,23 @@ import {
 import { Header } from './components/Header';
 import { ToiletMap } from './components/ToiletMap';
 import { ToiletList } from './components/ToiletList';
-import { ToiletDetails } from './components/ToiletDetails';
-import { DataSourceModal } from './components/DataSourceModal';
-import { ReviewModal } from './components/ReviewModal';
-import { AddToiletModal } from './components/AddToiletModal';
+// A: モーダル・詳細パネルは遅延ロード（メイン結月削減）。直接テストする側は
+// 各コンポーネントを直接importするため影響なし
+const ToiletDetails = lazy(() =>
+  import('./components/ToiletDetails').then((m) => ({ default: m.ToiletDetails }))
+);
+const DataSourceModal = lazy(() =>
+  import('./components/DataSourceModal').then((m) => ({ default: m.DataSourceModal }))
+);
+const ReviewModal = lazy(() =>
+  import('./components/ReviewModal').then((m) => ({ default: m.ReviewModal }))
+);
+const AddToiletModal = lazy(() =>
+  import('./components/AddToiletModal').then((m) => ({ default: m.AddToiletModal }))
+);
+const AdminPanel = lazy(() =>
+  import('./components/AdminPanel').then((m) => ({ default: m.AdminPanel }))
+);
 import { BdiText } from './components/BdiText';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { useFavorites } from './hooks/useFavorites';
@@ -231,6 +250,15 @@ export default function App() {
   const [isDataSourcesModalOpen, setIsDataSourcesModalOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  // C: 隠し管理パネル。URL末尾に #admin を付けて開く（ADMIN_TOKEN はパネル内で入力）
+  const [isAdminOpen, setIsAdminOpen] = useState<boolean>(() =>
+    typeof window !== 'undefined' && window.location.hash === '#admin'
+  );
+  useEffect(() => {
+    const onHash = () => setIsAdminOpen(window.location.hash === '#admin');
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = (message: string) => {
@@ -563,8 +591,13 @@ export default function App() {
         body: JSON.stringify({ review: newReview }),
       });
     } catch {
-      // 通信断・静的ホスティングでは端末内に保存する。
-      showToast('サーバーに接続できないため、この端末のみに口コミを保存しました。');
+      // D: 通信断時は端末保存 + 再送キューへ（起動時・online復帰時に flush）
+      showToast('サーバーに接続できないため、この端末に保存し、後で再送します。');
+      enqueuePendingReview({
+        facilityId: toiletId,
+        review: newReview,
+        queuedAt: new Date().toISOString(),
+      });
       applyLocalReview(toiletId, newReview);
       return true;
     }
@@ -698,10 +731,85 @@ export default function App() {
         prev.map((t) => setHelpfulCount(t, toiletId, reviewId, data.helpfulCount))
       );
     } catch {
-      rollback();
-      showToast('「役に立った」を送信できませんでした（オフライン）。');
+      // D: 投票のオフライン時は巻き戻さずキューへ（再送時に確定値で同期）
+      enqueuePendingVote({
+        toiletId,
+        reviewId,
+        queuedAt: new Date().toISOString(),
+      });
+      showToast('オフラインのため「役に立った」を後で再送します。');
     }
   };
+
+  // D: 未同期キューの再送（起動1回 + online復帰時）。成功分だけキューから外す
+  useEffect(() => {
+    let cancelled = false;
+    const flush = async () => {
+      for (const p of loadPendingReviews()) {
+        if (cancelled) return;
+        try {
+          const res = await fetch(
+            `/api/community/toilets/${encodeURIComponent(p.facilityId)}/reviews`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ review: p.review }),
+            }
+          );
+          if (!res.ok) continue;
+          const outcome = await classifyReviewResponse(res, p.facilityId);
+          if (outcome.kind === 'server-toilet') {
+            const updated = outcome.toilet;
+            noteServerFacility(updated.id, (updated.reviews ?? []).map((r) => r.id));
+            setToilets((prev) =>
+              prev.map((t) => (t.id === p.facilityId ? unionServerToilet(t, updated) : t))
+            );
+            removePendingReview(p.review.id);
+          } else if (outcome.kind === 'server-external') {
+            externalReviewsRef.current = {
+              ...externalReviewsRef.current,
+              [p.facilityId]: outcome.reviews,
+            };
+            noteReviewsKnown(p.facilityId, outcome.reviews.map((r) => r.id));
+            setToilets((prev) =>
+              prev.map((t) =>
+                t.id === p.facilityId ? overlayExternalReviews(t, outcome.reviews) : t
+              )
+            );
+            removePendingReview(p.review.id);
+          }
+        } catch {
+          /* まだオフライン: 次回に持ち越し */
+        }
+      }
+      for (const v of loadPendingVotes()) {
+        if (cancelled) return;
+        try {
+          const res = await fetch(
+            `/api/community/reviews/${encodeURIComponent(v.reviewId)}/helpful`,
+            { method: 'POST' }
+          );
+          if (!res.ok) continue;
+          const data = await res.json().catch(() => null);
+          if (data && typeof data.helpfulCount === 'number') {
+            setToilets((prev) =>
+              prev.map((t) => setHelpfulCount(t, v.toiletId, v.reviewId, data.helpfulCount))
+            );
+          }
+          removePendingVote(v.reviewId);
+        } catch {
+          /* 次回に持ち越し */
+        }
+      }
+    };
+    flush();
+    const onOnline = () => flush();
+    window.addEventListener('online', onOnline);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', onOnline);
+    };
+  }, []);
 
   const handleReportReview = async (toiletId: string, reviewId: string) => {
     const reason = window.prompt('通報理由を入力してください（不適切な内容・いたずら等）');
@@ -881,6 +989,7 @@ export default function App() {
         {/* Desktop Side Panel */}
         {selectedToilet && (
           <div className="hidden md:block w-96 lg:w-[420px] shrink-0 h-full border-l border-line bg-surface">
+            <Suspense fallback={<div className="p-4 text-sm text-faint">読み込み中…</div>}>
             <ToiletDetails
               toilet={selectedToilet}
               onClose={() => setSelectedToiletId(null)}
@@ -892,6 +1001,7 @@ export default function App() {
               isFavorite={isFavorite}
               onToggleFavorite={toggleFavorite}
             />
+            </Suspense>
           </div>
         )}
 
@@ -911,6 +1021,7 @@ export default function App() {
                 <span className="text-[10px] text-faint font-medium">タップしてマップに戻る</span>
               </div>
               <div className="flex-1 overflow-hidden">
+                <Suspense fallback={<div className="p-4 text-sm text-faint">読み込み中…</div>}>
                 <ToiletDetails
                   toilet={selectedToilet}
                   onClose={() => {
@@ -925,6 +1036,7 @@ export default function App() {
                   isFavorite={isFavorite}
                   onToggleFavorite={toggleFavorite}
                 />
+                </Suspense>
               </div>
             </div>
           </div>
@@ -964,6 +1076,7 @@ export default function App() {
         </button>
       </div>
 
+      <Suspense fallback={null}>
       <DataSourceModal
         isOpen={isDataSourcesModalOpen}
         onClose={() => setIsDataSourcesModalOpen(false)}
@@ -982,6 +1095,10 @@ export default function App() {
         onAddToilet={handleAddToilet}
         defaultLocation={mapCenter}
       />
+      {isAdminOpen && (
+        <AdminPanel onClose={() => setIsAdminOpen(false)} />
+      )}
+      </Suspense>
 
       {toastMessage && (
         <div className="fixed bottom-16 sm:bottom-6 left-1/2 -translate-x-1/2 z-[3000] bg-ink/95 backdrop-blur-md text-white text-xs font-medium px-4 py-2.5 rounded-xl border border-white/10 shadow-2xl flex items-center gap-2 pointer-events-auto">
