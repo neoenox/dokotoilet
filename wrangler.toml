@@ -1,0 +1,24 @@
+# Cloudflare Pages/Workers deploy config (#114).
+# Static frontend: `dist/` (vite build). API: worker/app.ts (Hono).
+# First production runs WITHOUT D1 provisioned: create it with
+#   bunx wrangler d1 create kirei-toilet-community
+# then set the database_id below and apply worker/schema.sql.
+
+name = "kirei-toilet"
+main = "worker/app.ts"
+compatibility_date = "2026-09-16"
+
+[site]
+bucket = "dist"
+
+[vars]
+NODE_ENV = "production"
+
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "kirei-toilet-community"
+# database_id = "REPLACE_WITH_D1_ID"
+
+# Secrets (never commit values):
+#   bunx wrangler secret put COMMUNITY_SALT   # required: fixed salt for IP-hash vote/dedup guards
+#   bunx wrangler secret put ADMIN_TOKEN      # optional: enables admin moderation API

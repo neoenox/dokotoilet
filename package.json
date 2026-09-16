@@ -20,12 +20,14 @@
     "express": "^4.21.2",
     "express-rate-limit": "^8.7.0",
     "helmet": "^8.3.0",
+    "hono": "^4.13.8",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.546.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260916.1",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19",
