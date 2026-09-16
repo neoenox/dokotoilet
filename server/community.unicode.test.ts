@@ -77,14 +77,14 @@ describe("adversarial Unicode: URL filter (URL_RE)", () => {
     // 以下は元監査（PR #62）で「G1: 見逃す」と固定されていた行。URL_RE の拡張
     // （h\s*t\s*t\s*p は任意の ASCII "http" に一致、加えてTLDパターン）により
     // 拒否に変わった。意図的な強化であり、この固定により検知された。
-    ["ZWSP between ':' and '//' (https:\\u200B//)", "https:\u200B//spam.example"],
+    ["ZWSP between ':' and '//' (https:\u200B//)", "https:\u200B//spam.example"],
     ["fullwidth colon", "https\uFF1A//spam.example"],
     // 副作用として、URLでない本文中の "http" やTLD風表記も拒否される（過剰拒否）
     ["bare word http in prose", "これはhttpです"],
     ["TLD-like mention without scheme", "見て spam.example.com"],
     // 以下も元監査（PR #62）で「G1: 見逃す」と固定されていた行。判定前の正規化
     // （NFKC + \p{Cf}/\p{Cc} 除去、shared/textPolicy.ts）により検出に変わった。
-    ["LRM inside the scheme (h\\u200Ettps://)", "h\u200Ettps://spam.example"],
+    ["LRM inside the scheme (h\u200Ettps://)", "h\u200Ettps://spam.example"],
     ["fullwidth scheme letters", "\uFF48\uFF54\uFF54\uFF50\uFF53://spam.example"],
     ["fullwidth www host", "\uFF57\uFF57\uFF57.\uFF53\uFF50\uFF41\uFF4D.example"],
     // Default_Ignorable_Code_Point な不可視文字（\p{Mn}/\p{Lo} のため sanitizer は
@@ -176,6 +176,19 @@ describe("adversarial Unicode: invisible-only content is rejected (G2 closed)", 
   it("ZWSP padding around a userName is stripped by the sanitizer", () => {
     const r = validateReviewInput({ ...goodReview(), userName: "\u200Babc\u200B" });
     expect(r.value?.userName).toBe("abc");
+  });
+
+  it("a URL-like userName is rejected, not fallen back (#108 display-name spam)", () => {
+    for (const spam of [
+      "https://spam.example",
+      "h\u200Ettps://spam.example",
+      "ｈｔｔｐｓ://spam.example",
+      "see www.spam-example.com",
+    ]) {
+      const r = validateReviewInput({ ...goodReview(), userName: spam });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toBe("userName must not contain URLs");
+    }
   });
 });
 

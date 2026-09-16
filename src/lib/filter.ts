@@ -12,9 +12,11 @@ function isEvaluated(t: ToiletFacility): boolean {
   return t.reviewCount > 0;
 }
 
-/** 一覧の整列・推定表示に使うスコア: 評価済みは実測平均、未評価は設備推定値 */
+/** 一覧の整列・推定表示に使うスコア: 評価済みは実測平均、未評価は設備推定値。
+ * 未スコア（null）の施設は 0 扱い（NaN を返さない。ソート比較子が NaN を
+ * 返すと順序不定になるため。未評価同士は id で安定化される）。 */
 export function displayScore(t: ToiletFacility): number {
-  return isEvaluated(t) ? t.cleanlinessScore : t.equipmentScore;
+  return (isEvaluated(t) ? t.cleanlinessScore : t.equipmentScore) ?? 0;
 }
 
 /** フィルタ1件分の判定（検索・清潔度・設備・データ元・お気に入り・利用シーンプリセット） */
@@ -23,8 +25,10 @@ export function matchesFilter(
   f: FilterState,
   favoriteIdSet?: Set<string>
 ): boolean {
-  // お気に入りフィルタ
-  if ((f.onlyFavorites || f.quickPreset === 'favorites') && favoriteIdSet && !favoriteIdSet.has(t.id)) {
+  // お気に入りフィルタ。集合未受領（undefined）は「空集合」扱いとし、
+  // フィルタ有効時は全件除外する（素通りで全件表示しない。#105）。
+  const favs = favoriteIdSet ?? new Set<string>();
+  if ((f.onlyFavorites || f.quickPreset === 'favorites') && !favs.has(t.id)) {
     return false;
   }
 
@@ -132,7 +136,8 @@ export function sortToiletsByDistance(
 }
 
 /**
- * ソート条件に応じた並び替え
+ * ソート条件に応じた並び替え。
+ * 'distance' は基準座標なしでは清潔度順へフォールバックする（定義済み動作）。
  */
 export function sortToilets(
   toilets: ToiletFacility[],

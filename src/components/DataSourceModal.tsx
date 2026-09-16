@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { DATA_SOURCES_INFO } from '../data/dataSourcesInfo';
 import {
   Database,
@@ -22,10 +22,20 @@ export const DataSourceModal: React.FC<DataSourceModalProps> = ({
   isOpen,
   onClose,
 }) => {
+  // Esc で閉じる（#107 a11y）
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md" role="dialog" aria-modal="true" aria-label="きれいトイレのデータ元 徹底比較ガイド">
       <div className="bg-surface border border-line-strong rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="p-5 border-b border-line flex items-center justify-between bg-canvas">
@@ -45,6 +55,7 @@ export const DataSourceModal: React.FC<DataSourceModalProps> = ({
           <button
             type="button"
             onClick={onClose}
+            aria-label="閉じる"
             className="text-faint hover:text-ink p-1.5 rounded-lg text-sm transition-colors"
           >
             ✕

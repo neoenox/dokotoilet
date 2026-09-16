@@ -140,9 +140,9 @@ export function mapKumagayaRows(header: string[], rows: string[][]): KumagayaMap
     const hasHours = (start && start !== "なし") || (end && end !== "なし");
     const openingHours = hasHours
       ? `${start || "?"}～${end || "?"}${timeNote ? `（${timeNote}）` : ""}`
-      : "常時開放";
+      : "営業時間未確認";
     // 利用時間列が無いことは「24時間営業」の根拠にならない。
-    // 常時開放と断定せず null（未確認）とする。表示文言（常時開放）は openingHours 側。
+    // 常時開放と断定せず null（未確認）とする。表示文言も未確認にする。
     const isOpen24h: boolean | null = hasHours ? false : null;
     const category: FacilityCategory = name.includes("駅") ? "station" : "park";
     // 設備推定スコア（実測口コミなし）。推定モデルは src/lib/estimate.ts に一本化

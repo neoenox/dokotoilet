@@ -43,9 +43,10 @@ describe("mapKumagayaRows", () => {
     expect(f.equipmentGrade).toBe("B");
     expect(f.estimateBasis?.length).toBeGreaterThan(0);
     expect(f.reviewCount).toBe(0);
-    // 利用時間列が空でも「24時間」とは断定しない（未確認 = null）
+    // 利用時間列が空でも「24時間」とは断定しない（未確認 = null）。
+    // 表示文言も「常時開放」と断定せず未確認にする（#110）。
     expect(f.attributes.isOpen24h).toBeNull();
-    expect(f.openingHours).toBe("常時開放");
+    expect(f.openingHours).toBe("営業時間未確認");
     // 和式・洋式の件数が両方 0（情報なし）でも "both" とは断定しない
     expect(f.attributes.toiletStyle).toBeNull();
   });

@@ -265,7 +265,7 @@ export const Header: React.FC<HeaderProps> = ({
               value={filter.dataSource}
               onChange={(e) => {
                 const v = e.target.value;
-                if (v !== 'all' && v !== 'osm' && v !== 'google' && v !== 'opendata' && v !== 'community') return;
+                if (v !== 'all' && v !== 'osm' && v !== 'google' && v !== 'opendata' && v !== 'manual' && v !== 'community') return;
                 setFilter((prev) => ({ ...prev, dataSource: v }));
               }}
               className="bg-surface border border-line text-ink-soft rounded-md px-2 py-1 text-xs focus:ring-1 focus:ring-accent focus:outline-none shrink-0"
@@ -274,6 +274,7 @@ export const Header: React.FC<HeaderProps> = ({
               <option value="osm">OpenStreetMap</option>
               <option value="google">Google（手動調査）</option>
               <option value="opendata">自治体オープンデータ</option>
+              <option value="manual">手動調査</option>
               <option value="community">ユーザー投稿</option>
             </select>
 

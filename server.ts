@@ -31,6 +31,7 @@ import {
 } from "./src/lib/osm";
 import { isOsmElementType, osmFacilityId } from "./src/lib/osmIds";
 import { estimateEquipmentScore } from "./src/lib/estimate";
+import { sanitizeText } from "./src/lib/textPolicy";
 
 /** クエリパラメータ→数値。未指定は undefined、指定があれば数値化（数値化不能は NaN）。 */
 function parseQueryNum(v: unknown): number | undefined {
@@ -44,14 +45,47 @@ function parseQueryNum(v: unknown): number | undefined {
   return NaN;
 }
 
+/**
+ * 上限付きJSON読み取り。上流（Overpass）の巨大応答でサーバーがOOMしないよう、
+ * reader で受信バイトを計数し、上限超過で即座に中断してエラーを投げる。
+ * Content-Length 宣言の有無にかかわらず有効（#109）。
+ */
+async function readJsonWithLimit(res: globalThis.Response, maxBytes: number): Promise<unknown> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const text = await res.text();
+    if (text.length > maxBytes) throw new Error(`response too large (${text.length} bytes)`);
+    return JSON.parse(text);
+  }
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`response too large (>${maxBytes} bytes)`);
+    }
+    chunks.push(value);
+  }
+  const text = Buffer.concat(chunks).toString("utf-8");
+  return JSON.parse(text);
+}
+
 async function startServer() {
   const app = express();
   // Cloud Run / AI Studio は PORT 環境変数を注入する
   const PORT = parseInt(process.env.PORT || "3000", 10) || 3000;
 
-  // Cloud Runはリバースプロキシ配下のため、rate-limitのIP判定用に1段だけ信頼する
-  // CDN追加時は段数を増やすと req.ip 偽装→投票なりすましの恐れがあるため要精査
-  app.set("trust proxy", 1);
+  // Cloud Runはリバースプロキシ配下のため、rate-limitのIP判定用に信頼段数を設定する。
+  // 段数は TRUST_PROXY_HOPS（既定1）で変更する。CDN追加時は段数を増やすと
+  // req.ip 偽装→投票なりすましの恐れがあるため要精査（.env.example参照）。
+  const trustProxyHops = Math.max(
+    0,
+    parseInt(process.env.TRUST_PROXY_HOPS ?? "1", 10) || 0
+  );
+  app.set("trust proxy", trustProxyHops);
   // helmetの既定CSPは地図タイル（OSM/国土地理院）とVite開発サーバを壊すため調整する。
   // 開発時（Viteミドルウェア）はCSPを無効化するのが定石。
   // connect-src/script-src は既定維持（地図タイル用の img-src のみ追加）。
@@ -214,12 +248,14 @@ async function startServer() {
               lastMirrorError = new Error(`HTTP ${osmResponse.status}`);
               continue;
             }
-            const data = await osmResponse.json();
-            if (!Array.isArray(data.elements)) {
+            // 巨大応答によるOOMを防ぐため、上限（8MB）を超えたら読み捨てる。
+            // Content-Length が無い chunked 応答もあるため reader で計数する。
+            const data = await readJsonWithLimit(osmResponse, 8 * 1024 * 1024);
+            if (!Array.isArray((data as any)?.elements)) {
               lastMirrorError = new Error("Overpass response missing elements array");
               continue;
             }
-            rawElements = data.elements;
+            rawElements = (data as any).elements as any[];
             upstreamSucceeded = true;
             break;
           } finally {
@@ -268,12 +304,19 @@ async function startServer() {
           const tags = el.tags || {};
           if (!isOsmElementType(el.type)) return null;
           const facilityId = osmFacilityId(el.type, el.id);
-          let name = tags.name || tags["name:ja"];
+          // 上流OSMタグは第三者が編集できるため、表示名・説明文に使う前に
+          // 制御・書式文字を除去する（XSS土台化の防止。HTML特殊文字は
+          // React側のエスケープ描画＋title属性表示のためサーバーでは触らない）。
+          const cleanTag = (v: unknown): string =>
+            typeof v === "string" ? sanitizeText(v).trim() : "";
+          let name = cleanTag(tags.name) || cleanTag(tags["name:ja"]);
           if (!name) {
-            if (tags.operator) {
-              name = `${tags.operator} 公衆トイレ`;
-            } else if (tags.description) {
-              name = `公衆トイレ (${tags.description})`;
+            const operator = cleanTag(tags.operator);
+            const desc = cleanTag(tags.description);
+            if (operator) {
+              name = `${operator} 公衆トイレ`;
+            } else if (desc) {
+              name = `公衆トイレ (${desc})`;
             } else {
               name = `公衆便所 (OSM #${el.id})`;
             }
@@ -364,16 +407,16 @@ async function startServer() {
             name,
             facilityType: isTheTokyoToilet
               ? "THE TOKYO TOILET (渋谷区デザイン公衆トイレ)"
-              : tags.operator
-              ? `${tags.operator} 管理公衆便所`
+              : cleanTag(tags.operator)
+              ? `${cleanTag(tags.operator)} 管理公衆便所`
               : "公衆便所 (OpenStreetMap実在登録)",
             category,
             dataSource: "osm" as const,
             lat: itemLat,
             lng: itemLng,
             address:
-              tags["addr:full"] ||
-              tags["addr:street"] ||
+              cleanTag(tags["addr:full"]) ||
+              cleanTag(tags["addr:street"]) ||
               "周辺道路・公園内",
             cleanlinessGrade: grade,
             cleanlinessScore: score,
@@ -388,7 +431,7 @@ async function startServer() {
             attributes: osmAttributesFromTags(tags),
             openingHours: formatOsmOpeningHours(tags.opening_hours),
             description: `OpenStreetMap (${el.type} ID: ${el.id}) に登録されている実在の公衆トイレです。${
-              tags.description ? tags.description : ""
+              cleanTag(tags.description)
             }`,
             reviewCount: 0,
             reviews: [],
@@ -463,11 +506,34 @@ async function startServer() {
         toilets: [],
         count: 0,
         source: "error",
-        error: err?.message ?? "unknown",
+        // 内部エラー文言（上流URL・タイムアウト詳細等）は外部に露出させない（#109）
+        error: "upstream unavailable",
         timestamp: new Date().toISOString(),
       });
     }
   });
+
+  // express.json のパース失敗（SyntaxError / entity.too.large）は 400 系で返す。
+  // 汎用500に落とすと監視・クライアント判定を誤らせる（#109）。
+  app.use(
+    (
+      err: unknown,
+      _req: Request,
+      res: Response,
+      next: NextFunction
+    ) => {
+      const rec: Record<string, unknown> =
+        typeof err === "object" && err !== null
+          ? (err as Record<string, unknown>)
+          : {};
+      const status = typeof rec.status === "number" ? rec.status : null;
+      if (err instanceof SyntaxError && status !== null) {
+        res.status(status >= 500 ? 400 : status).json({ error: "invalid JSON body" });
+        return;
+      }
+      next(err);
+    }
+  );
 
   app.use(
     (

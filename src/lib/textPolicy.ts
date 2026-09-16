@@ -208,6 +208,9 @@ export const TEXT_FIELDS = {
     max: 30,
     onInvisibleOnly: "fallback",
     fallback: "匿名の利用者",
+    // 表示名スパム（URLを表示名に入れて保存・配信する手口）を塞ぐ。
+    // fallback欄だがURL検出時はフォールバックせず拒否する（runTextFieldの順序）。
+    urlError: "userName must not contain URLs",
   },
   comment: {
     field: "comment",

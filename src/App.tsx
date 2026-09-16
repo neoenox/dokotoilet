@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, Suspense, lazy } from 'react';
 import {
   ToiletFacility,
+  CleanlinessGrade,
   FilterState,
   CityPreset,
   ToiletReview,
@@ -74,6 +75,7 @@ const AdminPanel = lazy(() =>
   import('./components/AdminPanel').then((m) => ({ default: m.AdminPanel }))
 );
 import { BdiText } from './components/BdiText';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { useFavorites } from './hooks/useFavorites';
 import {
@@ -90,9 +92,12 @@ import {
 } from 'lucide-react';
 
 const RAW_SEED_TOILETS = mergeSeedLists(
-  TERMINAL_STATIONS_SEED,
+  // 優先順位: GOOGLE（手動調査・外部口コミ件数あり）> TERMINAL（手動調査・件数なし）
+  // > KUMAGAYA（自治体OD）> INITIAL（OSM手書き）。根拠の厚い調査値を薄い推定で
+  // 上書きしない（#110）。
+  GOOGLE_SEED,
   mergeSeedLists(
-    GOOGLE_SEED,
+    TERMINAL_STATIONS_SEED,
     mergeSeedLists(KUMAGAYA_SEED, INITIAL_TOILETS)
   )
 );
@@ -101,49 +106,55 @@ const SEED_ID_ALIASES = buildFacilityIdAliases(RAW_SEED_TOILETS, SEED_TOILETS);
 
 const SEED_ID_SET = new Set(SEED_TOILETS.map((t) => t.id));
 
-export function sanitizeToiletFacility(raw: any): ToiletFacility {
+/** 信頼できない保存データ（localStorage/サーバー応答）を ToiletFacility へ正規化する。
+ * 引数は unknown として受け、境界で一度だけレコードへ絞る。以後の読み取りは
+ * 型付きヘルパー経由のみ（any 禁止）。未評価のコミュニティ登録はスコア null の
+ * まま返し、呼び出し側は displayGrade の null 経路で「未評価」表示する。 */
+export function sanitizeToiletFacility(raw: unknown): ToiletFacility | null {
+  const src: Record<string, unknown> =
+    typeof raw === "object" && raw !== null
+      ? (raw as Record<string, unknown>)
+      : {};
+  const num = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  const grade = (v: unknown): CleanlinessGrade | null =>
+    v === "S" || v === "A" || v === "B" || v === "C" || v === "D" ? v : null;
+  const sub = (v: unknown): number | null => num(v);
+  const rec = (v: unknown): Record<string, unknown> =>
+    typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+
+  const srcReviews = src.reviews;
+  const srcSub = rec(src.subScores);
+  const srcAttrs = rec(src.attributes);
   const unscoredCommunityRegistration =
-    raw?.dataSource === 'community' && raw?.reviewCount === 0 &&
-    raw?.cleanlinessScore == null && raw?.equipmentScore == null;
+    src.dataSource === 'community' && src.reviewCount === 0 &&
+    src.cleanlinessScore == null && src.equipmentScore == null;
   const cleanlinessScore = unscoredCommunityRegistration
     ? null
-    : typeof raw?.cleanlinessScore === 'number' && !isNaN(raw.cleanlinessScore)
-      ? raw.cleanlinessScore
-      : typeof raw?.equipmentScore === 'number' && !isNaN(raw.equipmentScore)
-      ? raw.equipmentScore
-      : 3.0;
+    : num(src.cleanlinessScore) ?? num(src.equipmentScore) ?? 3.0;
 
   const cleanlinessGrade = unscoredCommunityRegistration
     ? null
-    : raw?.cleanlinessGrade || gradeForScore(cleanlinessScore);
+    : grade(src.cleanlinessGrade) ?? (cleanlinessScore === null ? null : gradeForScore(cleanlinessScore));
 
   const equipmentScore = unscoredCommunityRegistration
     ? null
-    : typeof raw?.equipmentScore === 'number' && !isNaN(raw.equipmentScore)
-      ? raw.equipmentScore
-      : cleanlinessScore;
+    : num(src.equipmentScore) ?? cleanlinessScore;
 
   const equipmentGrade = unscoredCommunityRegistration
     ? null
-    : raw?.equipmentGrade || gradeForScore(equipmentScore);
+    : grade(src.equipmentGrade) ?? (equipmentScore === null ? null : gradeForScore(equipmentScore));
 
   const subScores = {
-    cleanliness: unscoredCommunityRegistration ? null :
-      typeof raw?.subScores?.cleanliness === 'number' && !isNaN(raw.subScores.cleanliness)
-        ? raw.subScores.cleanliness : cleanlinessScore,
-    odor: unscoredCommunityRegistration ? null :
-      typeof raw?.subScores?.odor === 'number' && !isNaN(raw.subScores.odor)
-        ? raw.subScores.odor : cleanlinessScore,
-    supplies: unscoredCommunityRegistration ? null :
-      typeof raw?.subScores?.supplies === 'number' && !isNaN(raw.subScores.supplies)
-        ? raw.subScores.supplies : cleanlinessScore,
-    comfort: unscoredCommunityRegistration ? null :
-      typeof raw?.subScores?.comfort === 'number' && !isNaN(raw.subScores.comfort)
-        ? raw.subScores.comfort : cleanlinessScore,
+    cleanliness: unscoredCommunityRegistration ? null : sub(srcSub.cleanliness) ?? cleanlinessScore,
+    odor: unscoredCommunityRegistration ? null : sub(srcSub.odor) ?? cleanlinessScore,
+    supplies: unscoredCommunityRegistration ? null : sub(srcSub.supplies) ?? cleanlinessScore,
+    comfort: unscoredCommunityRegistration ? null : sub(srcSub.comfort) ?? cleanlinessScore,
   };
 
-  const rawAttrs = (raw?.attributes ?? {}) as Record<string, unknown>;
+  const rawAttrs = srcAttrs;
   const tri = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
+  const styleRaw = rawAttrs.toiletStyle;
   const attributes = {
     hasWashlet: tri(rawAttrs.hasWashlet),
     hasMultipurpose: tri(rawAttrs.hasMultipurpose),
@@ -157,21 +168,31 @@ export function sanitizeToiletFacility(raw: any): ToiletFacility {
     hasAlcohol: tri(rawAttrs.hasAlcohol),
     hasPaperTowelOrDryer: tri(rawAttrs.hasPaperTowelOrDryer),
     toiletStyle:
-      rawAttrs.toiletStyle === 'western' ||
-      rawAttrs.toiletStyle === 'both' ||
-      rawAttrs.toiletStyle === 'japanese'
-        ? rawAttrs.toiletStyle
+      styleRaw === 'western' ||
+      styleRaw === 'both' ||
+      styleRaw === 'japanese'
+        ? styleRaw
         : null,
   };
 
-  const reviews = Array.isArray(raw?.reviews) ? raw.reviews : [];
+  const reviews = Array.isArray(srcReviews) ? srcReviews : [];
   const reviewCount =
-    typeof raw?.reviewCount === 'number' && !isNaN(raw.reviewCount)
-      ? raw.reviewCount
+    typeof src.reviewCount === 'number' && !isNaN(src.reviewCount)
+      ? src.reviewCount
       : reviews.length;
 
+  // id/lat/lng の欠落・NaN・Infinity は復旧不能のため null を返し、
+  // 呼び出し側で除外する（L.marker 落下・マップ描画破綻の防止。#105）。
+  const id = typeof src.id === "string" && src.id.length > 0 ? src.id : null;
+  const lat = num(src.lat);
+  const lng = num(src.lng);
+  if (id === null || lat === null || lng === null) return null;
+
   return {
-    ...raw,
+    ...src,
+    id,
+    lat,
+    lng,
     cleanlinessScore,
     cleanlinessGrade,
     equipmentScore,
@@ -180,7 +201,7 @@ export function sanitizeToiletFacility(raw: any): ToiletFacility {
     attributes,
     reviewCount,
     reviews,
-  };
+  } as ToiletFacility;
 }
 
 export default function App() {
@@ -208,10 +229,12 @@ export default function App() {
           localStorage.getItem(LEGACY_TOILETS_V2_KEY);
         if (legacy) {
           delta = migrateLegacyArray(JSON.parse(legacy));
-          localStorage.removeItem(LEGACY_TOILETS_V3_KEY);
-          localStorage.removeItem(LEGACY_TOILETS_V2_KEY);
         }
       }
+      // 旧全体スナップショットキーは移行元としての役目を終えたら常に削除する。
+      // delta有無にかかわらず残置すると、不正JSON時の毎起動再試行になる（#105）。
+      localStorage.removeItem(LEGACY_TOILETS_V3_KEY);
+      localStorage.removeItem(LEGACY_TOILETS_V2_KEY);
       if (delta) delta = remapReviewDeltaKeys(delta, SEED_ID_ALIASES);
       const cachedOsm = parseToiletArray(localStorage.getItem(OSM_CACHE_KEY));
       const seeded = applyDeltaToSeeds(SEED_TOILETS, delta ?? emptyDelta());
@@ -219,7 +242,9 @@ export default function App() {
     } catch (e) {
       console.warn('Failed to load saved toilets from localStorage:', e);
     }
-    return SEED_TOILETS.map(sanitizeToiletFacility);
+    return SEED_TOILETS.map((t) => sanitizeToiletFacility(t)).filter(
+      (t): t is ToiletFacility => t !== null
+    );
   });
 
   const [selectedToiletId, setSelectedToiletId] = useState<string | null>(
@@ -347,7 +372,9 @@ export default function App() {
         if (!res.ok) return;
         const data = await res.json();
         const serverItems = Array.isArray(data.toilets)
-          ? (data.toilets as any[]).map(sanitizeToiletFacility)
+          ? data.toilets
+              .map(sanitizeToiletFacility)
+              .filter((t): t is ToiletFacility => t !== null)
           : [];
         const externalReviews =
           data.externalReviews && typeof data.externalReviews === 'object'
@@ -465,7 +492,9 @@ export default function App() {
       // サーバーが正規化済みの toilets を必ず返すので、クライアント側の
       // elements→施設 変換（旧フォールバック二重実装）は廃止した。
       const incoming: ToiletFacility[] = Array.isArray(data.toilets)
-        ? (data.toilets as any[]).map(sanitizeToiletFacility)
+        ? data.toilets
+            .map(sanitizeToiletFacility)
+            .filter((t): t is ToiletFacility => t !== null)
         : [];
 
       if (incoming.length === 0) {
@@ -650,7 +679,9 @@ export default function App() {
 
   // Add new toilet (server first, local fallback)
   const handleAddToilet = async (newFacility: ToiletFacility) => {
-    const sanitized = sanitizeToiletFacility(newFacility);
+    // モーダルが構築した施設は正規形のはずだが、念のため検証する
+    //（null の場合はサーバー応答待ちにせず入力を保持して終了）。
+    const sanitized = sanitizeToiletFacility(newFacility) ?? newFacility;
     setToilets((prev) => [sanitized, ...prev]);
     setSelectedToiletId(sanitized.id);
     setMapCenter({ lat: sanitized.lat, lng: sanitized.lng });
@@ -848,6 +879,7 @@ export default function App() {
             mobileTab === 'list' ? 'block' : 'hidden md:block'
           }`}
         >
+          <ErrorBoundary region="一覧パネル" resetKey={selectedToiletId ?? 'none'}>
           <ToiletList
             toilets={filteredToilets}
             selectedToilet={selectedToilet}
@@ -868,6 +900,7 @@ export default function App() {
             isFavorite={isFavorite}
             onToggleFavorite={toggleFavorite}
           />
+          </ErrorBoundary>
         </div>
 
         <div
@@ -875,6 +908,7 @@ export default function App() {
             mobileTab === 'map' ? 'block' : 'hidden md:block'
           }`}
         >
+          <ErrorBoundary region="地図" resetKey={mobileTab + (selectedToilet !== null ? ':open' : ':closed')}>
           <ToiletMap
             toilets={filteredToilets}
             selectedToilet={selectedToilet}
@@ -894,6 +928,7 @@ export default function App() {
             layoutKey={mobileTab + (selectedToilet !== null ? ':open' : ':closed')}
             userLocation={userLocation}
           />
+          </ErrorBoundary>
 
           {/* Mobile Bottom Sheet Preview Card (when map is active and details not fully expanded) */}
           {selectedToilet && mobileTab === 'map' && !mobileDetailsExpanded && (
@@ -989,6 +1024,7 @@ export default function App() {
         {/* Desktop Side Panel */}
         {selectedToilet && (
           <div className="hidden md:block w-96 lg:w-[420px] shrink-0 h-full border-l border-line bg-surface">
+            <ErrorBoundary region="詳細パネル" resetKey={selectedToilet.id}>
             <Suspense fallback={<div className="p-4 text-sm text-faint">読み込み中…</div>}>
             <ToiletDetails
               toilet={selectedToilet}
@@ -1002,6 +1038,7 @@ export default function App() {
               onToggleFavorite={toggleFavorite}
             />
             </Suspense>
+            </ErrorBoundary>
           </div>
         )}
 
@@ -1021,6 +1058,7 @@ export default function App() {
                 <span className="text-[10px] text-faint font-medium">タップしてマップに戻る</span>
               </div>
               <div className="flex-1 overflow-hidden">
+                <ErrorBoundary region="詳細パネル" resetKey={selectedToilet.id}>
                 <Suspense fallback={<div className="p-4 text-sm text-faint">読み込み中…</div>}>
                 <ToiletDetails
                   toilet={selectedToilet}
@@ -1037,6 +1075,7 @@ export default function App() {
                   onToggleFavorite={toggleFavorite}
                 />
                 </Suspense>
+                </ErrorBoundary>
               </div>
             </div>
           </div>
@@ -1101,7 +1140,7 @@ export default function App() {
       </Suspense>
 
       {toastMessage && (
-        <div className="fixed bottom-16 sm:bottom-6 left-1/2 -translate-x-1/2 z-[3000] bg-ink/95 backdrop-blur-md text-white text-xs font-medium px-4 py-2.5 rounded-xl border border-white/10 shadow-2xl flex items-center gap-2 pointer-events-auto">
+        <div role="status" aria-live="polite" className="fixed bottom-16 sm:bottom-6 left-1/2 -translate-x-1/2 z-[3000] bg-ink/95 backdrop-blur-md text-white text-xs font-medium px-4 py-2.5 rounded-xl border border-white/10 shadow-2xl flex items-center gap-2 pointer-events-auto">
           <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{toastMessage}</span>
         </div>
