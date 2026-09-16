@@ -285,6 +285,11 @@ describe("FirestoreCommunityStore", () => {
     const added = await store.addReview("toilet-user-a", review("clean"), "ip-a");
     const reviewId = added.toilet!.reviews[0].id;
     expect((await store.deleteReview(reviewId)).reviewCount).toBe(0);
+    expect(await store.voteHelpful(reviewId, "after-delete")).toEqual({
+      helpfulCount: 0,
+      voted: false,
+      found: false,
+    });
     expect(db.bucket("facility_aggregates").get("toilet-user-a")).toMatchObject({ reviewCount: 0 });
     expect((await store.getToilets())[0].reviewCount).toBe(0);
   });

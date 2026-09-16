@@ -332,7 +332,9 @@ export class FirestoreCommunityStore implements CommunityRepository {
     const voteRef = this.col("helpful_votes").doc(this.voteId(reviewId, ipHash));
     return this.db.runTransaction(async (tx) => {
       const review = await tx.get(reviewRef);
-      if (!review.exists) return { helpfulCount: 0, voted: false, found: false };
+      if (!review.exists || review.data()?.deleted === true) {
+        return { helpfulCount: 0, voted: false, found: false };
+      }
       const vote = await tx.get(voteRef);
       const current = Number(review.data()?.helpfulCount ?? 0);
       if (vote.exists) return { helpfulCount: current, voted: false, found: true };
