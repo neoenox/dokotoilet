@@ -14,6 +14,12 @@ import { reviewScoreFields, summarizeReviews } from "./scoring";
 export const LOCAL_DELTA_KEY = "kirei-toilet-delta-v1";
 export const OSM_CACHE_KEY = "kirei-toilet-osm-cache-v1";
 export const VOTED_REVIEWS_KEY = "kirei-toilet-voted-reviews";
+// D: オフライン時の未同期キュー（再送待ち）。起動時・online復帰時に flush する
+// - pendingReviews: fetch 自体が失敗した口コミPOST（サーバー応答ありの拒否は含めない）
+// - pendingVotes: 送信失敗した helpful 投票（楽観カウント巻き戻し分を再送する）
+export const PENDING_REVIEWS_KEY = "kirei-toilet-pending-reviews-v1";
+export const PENDING_VOTES_KEY = "kirei-toilet-pending-votes-v1";
+export const PENDING_QUEUE_MAX = 100;
 // 旧バージョン（トイレ全体スナップショット）のキー。移行後は削除する
 export const LEGACY_TOILETS_V3_KEY = "toilet_cleanliness_map_real_v3";
 export const LEGACY_TOILETS_V2_KEY = "toilet_cleanliness_map_real_v2";
@@ -250,9 +256,111 @@ export function clearStoredUserData(): void {
     localStorage.removeItem(LOCAL_DELTA_KEY);
     localStorage.removeItem(OSM_CACHE_KEY);
     localStorage.removeItem(VOTED_REVIEWS_KEY);
+    localStorage.removeItem(PENDING_REVIEWS_KEY);
+    localStorage.removeItem(PENDING_VOTES_KEY);
   } catch {
     // localStorage が使えない環境（プライベートモード等）では何もしない
   }
+}
+
+/** D: 未同期キュー操作（localStorage 永続・上限付き・不正データ耐性） */
+
+export interface PendingReview {
+  facilityId: string;
+  review: ToiletReview;
+  queuedAt: string;
+}
+
+export interface PendingVote {
+  toiletId: string;
+  reviewId: string;
+  queuedAt: string;
+}
+
+function readJsonArray(raw: string | null): unknown[] {
+  if (!raw) return [];
+  try {
+    const p: unknown = JSON.parse(raw);
+    return Array.isArray(p) ? p : [];
+  } catch {
+    return [];
+  }
+}
+
+function isValidReview(r: unknown): r is ToiletReview {
+  return (
+    !!r &&
+    typeof (r as ToiletReview).id === "string" &&
+    typeof (r as ToiletReview).rating === "number"
+  );
+}
+
+export function loadPendingReviews(): PendingReview[] {
+  try {
+    return readJsonArray(localStorage.getItem(PENDING_REVIEWS_KEY))
+      .filter(
+        (p): p is PendingReview =>
+          !!p &&
+          typeof (p as PendingReview).facilityId === "string" &&
+          isValidReview((p as PendingReview).review)
+      )
+      .slice(-PENDING_QUEUE_MAX);
+  } catch {
+    return [];
+  }
+}
+
+export function loadPendingVotes(): PendingVote[] {
+  try {
+    return readJsonArray(localStorage.getItem(PENDING_VOTES_KEY))
+      .filter(
+        (p): p is PendingVote =>
+          !!p &&
+          typeof (p as PendingVote).toiletId === "string" &&
+          typeof (p as PendingVote).reviewId === "string"
+      )
+      .slice(-PENDING_QUEUE_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function savePending(key: string, items: unknown[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(items.slice(-PENDING_QUEUE_MAX)));
+  } catch {
+    /* quota超過等は無視（次回起動時に再試行） */
+  }
+}
+
+export function enqueuePendingReview(item: PendingReview): PendingReview[] {
+  const cur = loadPendingReviews();
+  if (cur.some((p) => p.review.id === item.review.id)) return cur;
+  const next = [...cur, item];
+  savePending(PENDING_REVIEWS_KEY, next);
+  return next;
+}
+
+export function enqueuePendingVote(item: PendingVote): PendingVote[] {
+  const cur = loadPendingVotes();
+  if (cur.some((p) => p.reviewId === item.reviewId)) return cur;
+  const next = [...cur, item];
+  savePending(PENDING_VOTES_KEY, next);
+  return next;
+}
+
+export function removePendingReview(reviewId: string): void {
+  savePending(
+    PENDING_REVIEWS_KEY,
+    loadPendingReviews().filter((p) => p.review.id !== reviewId)
+  );
+}
+
+export function removePendingVote(reviewId: string): void {
+  savePending(
+    PENDING_VOTES_KEY,
+    loadPendingVotes().filter((p) => p.reviewId !== reviewId)
+  );
 }
 
 /** 起動時: 最新シードへユーザーデルタを重ねる（存在しない施設の差分は捨てる） */

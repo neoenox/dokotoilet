@@ -9,7 +9,8 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "smoke": "tsx scripts/smoke-check.ts"
   },
   "dependencies": {
     "@google-cloud/firestore": "9.0.1",
