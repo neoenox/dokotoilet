@@ -1,4 +1,5 @@
 import type { FacilityCategory, ToiletFacility } from "../../src/types";
+import { createHash } from "node:crypto";
 import { gradeForScore } from "../../src/lib/scoring";
 import { facilityTypeForCategory } from "../../src/lib/grade";
 
@@ -106,6 +107,26 @@ function slug(s: string): string {
   );
 }
 
+/** 短ハッシュ（ID衝突回避用。8桁hex） */
+function shortHash(s: string): string {
+  return createHash("sha256").update(s, "utf8").digest("hex").slice(0, 8);
+}
+
+/**
+ * 施設IDの決定論的導出。place_id ありを正とし、欠落時は slug＋内容ハッシュで
+ * 同名施設の衝突を防ぐ。80文字切詰めで衝突する長い place_id もハッシュ接尾辞で
+ * 一意化する（共有レビュー鍵の紐付けずれ防止。#111）。
+ */
+function facilityIdFor(name: string, address: string | null, googleMapsUrl: string): string {
+  const placeId = placeIdFromUrl(googleMapsUrl);
+  if (placeId) {
+    const full = `google-${placeId}`;
+    if (full.length <= 80) return full;
+    return `${full.slice(0, 71)}-${shortHash(placeId)}`;
+  }
+  return `google-${slug(name)}-${shortHash(`${name}|${address ?? ""}`)}`.slice(0, 80);
+}
+
 export async function convertItems(items: ManualItem[], opts: ConvertOpts): Promise<Converted> {
   const facilities: ToiletFacility[] = [];
   const skipped: { name: string; reason: string }[] = [];
@@ -177,8 +198,7 @@ export async function convertItems(items: ManualItem[], opts: ConvertOpts): Prom
     const bool = (v: unknown): boolean | null =>
       v === true ? true : v === false ? false : null;
 
-    const placeId = placeIdFromUrl(item.googleMapsUrl) ?? slug(name);
-    const id = `google-${placeId}`.slice(0, 80);
+    const id = facilityIdFor(name, item.address, item.googleMapsUrl);
 
     const basis = typeof item.scoreBasis === "string" && item.scoreBasis ? item.scoreBasis : "根拠の記載なし";
     // 次元別スコア: 有効な次元だけ採用し、欠落・範囲外は総合スコアへフォールバック
@@ -238,7 +258,7 @@ export async function convertItems(items: ManualItem[], opts: ConvertOpts): Prom
         ? { surveyedAt: item.surveyedAt }
         : {}),
       googleMapsUrl: item.googleMapsUrl,
-      officialOpenDataId: `gmaps-${placeId}`.slice(0, 80),
+      officialOpenDataId: `gmaps-${placeIdFromUrl(item.googleMapsUrl) ?? id.replace(/^google-/, "")}`.slice(0, 80),
     });
   }
 

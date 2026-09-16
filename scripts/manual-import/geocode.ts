@@ -35,6 +35,8 @@ function cleanAddress(address: string): string {
 /**
  * 名前→住所の順で試す。番地まで含む日本語住所は Nominatim が苦手なため、
  * 施設名を優先する。どのクエリでヒットしたかも返す（ログ用）。
+ * 候補間の連続リクエストで Nominatim ポリシー（1 req/s）を割らないよう、
+ * 2件目以降の前に約1.1秒待つ（#111）。
  */
 export async function geocodeBestEffort(
   name: string,
@@ -49,7 +51,9 @@ export async function geocodeBestEffort(
     const cleaned = cleanAddress(address);
     if (cleaned && cleaned !== name) candidates.push({ q: cleaned, label: "address" });
   }
-  for (const c of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    if (i > 0) await sleep(1100);
+    const c = candidates[i];
     const g = await geocodeNominatim(c.q, fetchFn);
     if (g) return { ...g, matched: c.label };
   }

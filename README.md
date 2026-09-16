@@ -12,8 +12,11 @@ bun run dev      # http://localhost:3000（tsx + Vite）
 bun run lint     # tsc --noEmit
 bun run test     # vitest
 bun run build    # vite build + server bundle → dist/
+bun run smoke    # 本番バンドルのE2Eスモーク（build後に実HTTP検証）
 bun start        # 本番起動（dist/server.cjs）
 ```
+
+管理パネルは `<URL>/#admin`（`ADMIN_TOKEN` が必要）。
 
 本番起動ポートは `process.env.PORT`（未設定時は 3000）。
 
@@ -103,6 +106,24 @@ bun start        # 本番起動（dist/server.cjs）
 - `COMMUNITY_SALT` は**必ず固定値**を設定すること（未設定だと起動毎にランダムになり、
   「IP毎1回」の投票・重複ガードが再起動のたびにリセットされる）。
   IPはソルト付きSHA-256ハッシュのみ保存し、ハッシュはAPI応答に含めない。
+- **本番配置（F）**: JSON バックエンドは**単一レプリカ + 永続ボリューム**が前提
+  （複数レプリカは互いに上書き合う。Cloud Run 等の ephemeral FS は再起動で
+  未コミット分が消える）。複数レプリカや消失不可の運用にする場合は
+  `COMMUNITY_BACKEND=firestore` へ切り替えること（手順は
+  `docs/durable-community-backend.md` Phase 2〜4。JSON→Firestore の dry-run /
+  emulator parity / write-freeze 切替、rollback は逆 export + parity 後に行う）。
+  デプロイ時の必須環境変数: `COMMUNITY_SALT`（固定の長い乱数）、
+  本番は `COMMUNITY_BACKEND` を明示指定（未指定だと起動拒否）。
+  `ADMIN_TOKEN` を設定すると通報管理 API が有効になる。
+- 通報管理UI（C）: ブラウザで `<公開URL>/#admin` を開くと管理パネルが出る
+  （`ADMIN_TOKEN` 入力→通報一覧→解決/レビュー削除）。本格精査は
+  `scripts/community-ops/curate.ts` を併用する。
+- 未同期キュー（D）: オフライン時の口コミ・投票は `kirei-toilet-pending-*-v1` に
+  保存され、起動時・`online` 復帰時に自動再送する（成功分だけキューから外す。
+  サーバー応答ありの拒否は再送しない）。
+- PWA オフライン（E）: OSM/国土地理院タイルは CacheFirst（各200枚・30日）、
+  `GET /api/community/toilets` は NetworkFirst（5秒タイムアウト→キャッシュ表示）。
+  アプリ shell は precache 済み。
 - 口コミはコミュニティ登録トイレに加え、OSM取得・Google手動調査・自治体ODの施設
   （`osm-*` / `google-*` / `od-*`）へも投稿でき、他端末と共有される（M5対応）。
   フロントは起動時に `externalReviews` を取得してシード施設へ重ねる。

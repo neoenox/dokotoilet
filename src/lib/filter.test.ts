@@ -167,6 +167,17 @@ describe("matchesFilter", () => {
     expect(matchesFilter(favFacility, baseFilter({ onlyFavorites: true }), favSet)).toBe(true);
     expect(matchesFilter(nonFavFacility, baseFilter({ onlyFavorites: true }), favSet)).toBe(false);
   });
+
+  it("excludes everything when onlyFavorites is set but the set is missing (#105)", () => {
+    expect(matchesFilter(mk("fav-1"), baseFilter({ onlyFavorites: true }), undefined)).toBe(false);
+    expect(
+      matchesFilter(mk("fav-1"), baseFilter({ quickPreset: "favorites" }), undefined)
+    ).toBe(false);
+  });
+
+  it("treats null scores as 0 in displayScore (no NaN into sort, #105)", () => {
+    expect(displayScore(mk("u", { cleanlinessScore: null, equipmentScore: null }))).toBe(0);
+  });
 });
 
 describe("displayScore", () => {
@@ -223,5 +234,29 @@ describe("sortToiletsForDisplay / filterAndSortToilets", () => {
 
     const sorted = filterAndSortToilets([far, near, mid], baseFilter(), "distance", ref);
     expect(sorted.map((t) => t.id)).toEqual(["near", "mid", "far"]);
+  });
+
+  it("falls back to cleanliness order for distance sort without a reference (#105)", () => {
+    const low = evaluated("low", 3.0);
+    const high = evaluated("high", 4.8);
+    expect(filterAndSortToilets([low, high], baseFilter(), "distance", null).map((t) => t.id)).toEqual([
+      "high",
+      "low",
+    ]);
+    expect(filterAndSortToilets([low, high], baseFilter(), "distance", undefined).map((t) => t.id)).toEqual([
+      "high",
+      "low",
+    ]);
+  });
+
+  it("sorts by review count for the reviews option (wired to UI, #105)", () => {
+    const few = evaluated("few", 4.8);
+    const many = { ...evaluated("many", 3.0), reviewCount: 10, reviews: [] };
+    const none = mk("none");
+    expect(filterAndSortToilets([none, few, many], baseFilter(), "reviews").map((t) => t.id)).toEqual([
+      "many",
+      "few",
+      "none",
+    ]);
   });
 });

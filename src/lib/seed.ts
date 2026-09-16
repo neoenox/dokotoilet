@@ -1,4 +1,4 @@
-import type { ToiletFacility, TriState } from "../types";
+import type { ToiletFacility, TriState, ToiletAttributes } from "../types";
 
 function toRad(d: number): number {
   return (d * Math.PI) / 180;
@@ -68,12 +68,14 @@ export function mergeSeedLists(
       merged.push(cand);
       continue;
     }
-    const dupAttrs = (dup.attributes ?? {}) as any;
-    const candAttrs = (cand.attributes ?? {}) as any;
+    // dup.attributes が存在すればライブ参照へ直接統合し、欠落時のみ新規割当する
+    // （スプレッドコピーにすると既存オブジェクトへの書戻しが失われるため参照を維持）
+    const dupAttrs: Partial<ToiletAttributes> = dup.attributes ?? {};
+    const candAttrs: Partial<ToiletAttributes> = cand.attributes ?? {};
     for (const k of UNION_BOOL_KEYS) {
-      dupAttrs[k] = unionTriState(dupAttrs[k], candAttrs[k]);
+      dupAttrs[k] = unionTriState(dupAttrs[k] ?? null, candAttrs[k] ?? null);
     }
-    if (!dup.attributes) dup.attributes = dupAttrs;
+    if (!dup.attributes) dup.attributes = dupAttrs as ToiletAttributes;
   }
   // 防衛: 同一IDが残っていたら施設を捨てずに一意化する（Reactキー/共有レビュー鍵の衝突防止）。
   // 本来はデータ生成側で防ぐべきで、ここが発火したら import スクリプト側を修正する。

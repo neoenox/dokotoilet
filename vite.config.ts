@@ -45,6 +45,10 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          // SPA オフライン対応: ナビゲーションは index.html へフォールバック（#112）。
+          // API はフォールバック対象外（アプリ側の localStorage フォールバックが処理する）。
+          navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/api/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -75,13 +79,44 @@ export default defineConfig(() => {
               },
             },
             {
-              urlPattern: /^https:\/\/unpkg\.com\/leaflet@.*/i,
+              // A/E: 地図タイルのオフライン閲覧（地下・圏外対策）。枚数と期間を絞る
+              urlPattern: /^https:\/\/tile\.openstreetmap\.org\/.*/i,
               handler: 'CacheFirst',
               options: {
-                cacheName: 'leaflet-cache',
+                cacheName: 'osm-tiles',
                 expiration: {
-                  maxEntries: 10,
+                  maxEntries: 200,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: /^https:\/\/cyberjapandata\.gsi\.go\.jp\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'gsi-tiles',
+                expiration: {
+                  maxEntries: 200,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              // コミュニティ一覧は NetworkFirst（最新口コミ優先・オフライン時はキャッシュ表示）
+              urlPattern: /^\/api\/community\/toilets.*/i,
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'community-api',
+                networkTimeoutSeconds: 5,
+                expiration: {
+                  maxEntries: 5,
+                  maxAgeSeconds: 60 * 60,
                 },
                 cacheableResponse: {
                   statuses: [0, 200],
@@ -108,6 +143,15 @@ export default defineConfig(() => {
             react: ['react', 'react-dom'],
             leaflet: ['leaflet'],
             icons: ['lucide-react'],
+            // A: シードデータ（約400件）をメイン結月から分離。静的importのままでも
+            // Rollup が別チャンクに切り出し、初回JSを削減する
+            seeds: [
+              './src/data/googleSeed.ts',
+              './src/data/kumagayaSeed.ts',
+              './src/data/terminalStationsSeed.ts',
+              './src/data/toilets.ts',
+              './src/data/realOsmSeed.ts',
+            ],
           },
         },
       },

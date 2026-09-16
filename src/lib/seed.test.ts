@@ -5,6 +5,7 @@ import type { ToiletFacility } from "../types";
 import { GOOGLE_SEED } from "../data/googleSeed";
 import { KUMAGAYA_SEED } from "../data/kumagayaSeed";
 import { INITIAL_TOILETS } from "../data/toilets";
+import { TERMINAL_STATIONS_SEED } from "../data/terminalStationsSeed";
 
 const mk = (id: string, lat: number, lng: number): ToiletFacility =>
   ({ id, lat, lng, reviewCount: 0 } as ToiletFacility);
@@ -128,5 +129,65 @@ describe("重複IDの回帰防止（App の SEED_TOILETS 合成を再現）", ()
     const ids = assembled.map((t) => t.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.length).toBeGreaterThan(100);
+  });
+});
+
+const EQUIPMENT_TRI_KEYS = [
+  "hasWashlet",
+  "hasMultipurpose",
+  "hasBabyTable",
+  "hasNursingRoom",
+  "hasPowderRoom",
+  "hasOstomate",
+  "hasSoap",
+  "hasAlcohol",
+  "hasPaperTowelOrDryer",
+] as const;
+
+// S級は実測レビューのみ。キュレーション例外（著名プロジェクト枠）のみ許可
+const LANDMARK_S_ALLOWLIST = ["osm-2198890502"];
+
+describe("シードの出所・グレード規約（#101 #102）", () => {
+  it("TERMINAL seedは全件 dataSource=manual（opendata/osmと偽装しない）", () => {
+    expect(TERMINAL_STATIONS_SEED.length).toBeGreaterThan(0);
+    for (const t of TERMINAL_STATIONS_SEED) {
+      expect(t.dataSource).toBe("manual");
+    }
+  });
+
+  it("reviewCount=0 の施設にS級を付けない（landmark例外を除く）", () => {
+    const all = [
+      ...TERMINAL_STATIONS_SEED,
+      ...GOOGLE_SEED,
+      ...KUMAGAYA_SEED,
+      ...INITIAL_TOILETS,
+    ];
+    for (const t of all) {
+      if (t.reviewCount === 0 && !LANDMARK_S_ALLOWLIST.includes(t.id)) {
+        expect(t.cleanlinessGrade, `${t.id}.cleanlinessGrade`).not.toBe("S");
+        expect(t.equipmentGrade, `${t.id}.equipmentGrade`).not.toBe("S");
+        expect(t.cleanlinessScore).toBeLessThanOrEqual(4.5);
+        expect(t.equipmentScore).toBeLessThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("手動・OSM手書きシードはestimateBasisを開示する", () => {
+    for (const t of [...TERMINAL_STATIONS_SEED, ...INITIAL_TOILETS]) {
+      expect(
+        Array.isArray(t.estimateBasis) && t.estimateBasis.length > 0,
+        t.id
+      ).toBe(true);
+    }
+  });
+
+  it("INITIAL_TOILETS（landmark除く）の設備フラグは未確認null（楽観断定しない）", () => {
+    for (const t of INITIAL_TOILETS) {
+      if (LANDMARK_S_ALLOWLIST.includes(t.id)) continue;
+      for (const k of EQUIPMENT_TRI_KEYS) {
+        expect(t.attributes[k], `${t.id}.${k}`).toBeNull();
+      }
+      expect(t.attributes.toiletStyle, `${t.id}.toiletStyle`).toBeNull();
+    }
   });
 });

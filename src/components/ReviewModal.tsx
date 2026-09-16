@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ToiletFacility, ToiletReview } from '../types';
 import {
   canSubmitReview,
@@ -48,6 +48,16 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Esc で閉じる（#107 a11y）。フォーカストラップまでは踏み込まない。
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen || !toilet) return null;
 
@@ -112,7 +122,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md" role="dialog" aria-modal="true" aria-label="トイレのきれい度を評価・投稿">
       <div className="bg-surface border border-line-strong rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-line flex items-center justify-between bg-canvas">
@@ -130,6 +140,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
           <button
             type="button"
             onClick={onClose}
+            aria-label="閉じる"
             className="text-faint hover:text-ink p-1 rounded-md text-sm transition-colors"
           >
             ✕

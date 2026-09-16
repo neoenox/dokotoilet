@@ -140,6 +140,8 @@ export const ToiletDetails: React.FC<ToiletDetailsProps> = ({
         return { label: 'OpenStreetMap (OSM)', bg: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
       case 'opendata':
         return { label: '自治体オープンデータ', bg: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
+      case 'manual':
+        return { label: '手動調査（公式ガイド等）', bg: 'bg-teal-50 text-teal-700 border-teal-200' };
       case 'community':
         return { label: 'コミュニティ・ユーザー投稿', bg: 'bg-amber-50 text-amber-700 border-amber-200' };
     }
@@ -315,7 +317,7 @@ export const ToiletDetails: React.FC<ToiletDetailsProps> = ({
                 {evaluated
                   ? `口コミ・評価 ${toilet.reviewCount}件`
                   : hasUnfetched
-                    ? `${externalSource}に約${externalCount}件あり・口コミ投稿で実測に更新`
+                    ? `${externalSource}に関連口コミ約${externalCount}件あり${externalCount >= 1000 ? '（建物全体の件数の可能性あり）' : ''}・口コミ投稿で実測に更新`
                     : `口コミ募集中・最初の投稿で実測に更新`}
               </p>
             </div>

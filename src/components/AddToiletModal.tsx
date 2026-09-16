@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ToiletFacility,
   FacilityCategory,
@@ -31,6 +31,7 @@ function TriPicker({
           key={String(o.v)}
           type="button"
           onClick={() => onChange(o.v)}
+          aria-pressed={value === o.v}
           className={`flex-1 px-2 py-1 rounded-md text-[11px] font-semibold border transition-colors ${
             value === o.v
               ? o.active
@@ -70,6 +71,16 @@ export const AddToiletModal: React.FC<AddToiletModalProps> = ({
   const [isOpen24h, setIsOpen24h] = useState<TriState>(null);
   const [description, setDescription] = useState('');
 
+  // Esc で閉じる（#107 a11y）
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   // 事前バリデーション（サーバー textPolicy と同一判定）。送信前に日本語 copy で理由を提示。
@@ -91,11 +102,12 @@ export const AddToiletModal: React.FC<AddToiletModalProps> = ({
       address: address.trim() || '現在地周辺',
       floorInfo: floorInfo.trim() || undefined,
       // 施設登録はメタデータだけを保存する。清潔度は登録後の通常レビューで評価する。
-      cleanlinessGrade: null as any,
-      cleanlinessScore: null as any,
-      equipmentGrade: null as any,
-      equipmentScore: null as any,
-      subScores: { cleanliness: null, odor: null, supplies: null, comfort: null } as any,
+      // 未評価は null（ToiletFacility の nullable 契約）。as any による隠蔽はしない。
+      cleanlinessGrade: null,
+      cleanlinessScore: null,
+      equipmentGrade: null,
+      equipmentScore: null,
+      subScores: { cleanliness: null, odor: null, supplies: null, comfort: null },
       attributes: {
         hasWashlet,
         hasMultipurpose,
@@ -123,7 +135,7 @@ export const AddToiletModal: React.FC<AddToiletModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md" role="dialog" aria-modal="true" aria-label="トイレを新しく登録">
       <div className="bg-surface border border-line-strong rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-line flex items-center justify-between bg-canvas">
@@ -143,6 +155,7 @@ export const AddToiletModal: React.FC<AddToiletModalProps> = ({
           <button
             type="button"
             onClick={onClose}
+            aria-label="閉じる"
             className="text-faint hover:text-ink p-1 rounded-md text-sm transition-colors"
           >
             ✕

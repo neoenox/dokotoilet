@@ -250,6 +250,8 @@ export function stats(db: DbFile): DbStats {
 export interface ReviewDelta {
   added: ReviewEntry[];
   removed: ReviewEntry[];
+  /** 同一IDで内容が変わったもの（本文・スコア改竄の検出用。#111） */
+  modified: { before: ReviewEntry; after: ReviewEntry }[];
 }
 
 export interface DbDiff {
@@ -267,6 +269,17 @@ export interface DbDiff {
   removedVoteReviewIds: string[];
 }
 
+/** 内容比較用の安定シリアライズ（キー順に依存しない） */
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "";
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const rec = v as Record<string, unknown>;
+  return `{${Object.keys(rec)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(rec[k])}`)
+    .join(",")}}`;
+}
+
 function diffReviewsById(
   oldList: ReviewEntry[] | undefined,
   newList: ReviewEntry[] | undefined
@@ -275,9 +288,17 @@ function diffReviewsById(
   const newById = new Map((newList ?? []).map((r) => [r.id, r]));
   const added: ReviewEntry[] = [];
   const removed: ReviewEntry[] = [];
-  for (const r of newById.values()) if (!oldById.has(r.id)) added.push(r);
+  const modified: { before: ReviewEntry; after: ReviewEntry }[] = [];
+  for (const r of newById.values()) {
+    const old = oldById.get(r.id);
+    if (!old) {
+      added.push(r);
+    } else if (stableStringify(old) !== stableStringify(r)) {
+      modified.push({ before: old, after: r });
+    }
+  }
   for (const r of oldById.values()) if (!newById.has(r.id)) removed.push(r);
-  return { added, removed };
+  return { added, removed, modified };
 }
 
 function collectRecordChanges(
@@ -288,7 +309,7 @@ function collectRecordChanges(
   const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   for (const key of keys) {
     const d = diffReviewsById(before[key], after[key]);
-    if (d.added.length > 0 || d.removed.length > 0) out[key] = d;
+    if (d.added.length > 0 || d.removed.length > 0 || d.modified.length > 0) out[key] = d;
   }
   return out;
 }
@@ -307,7 +328,8 @@ export function diffStores(before: DbFile, after: DbFile): DbDiff {
       continue;
     }
     const d = diffReviewsById(old.reviews, t.reviews);
-    if (d.added.length > 0 || d.removed.length > 0) toiletReviewChanges[t.id] = d;
+    if (d.added.length > 0 || d.removed.length > 0 || d.modified.length > 0)
+      toiletReviewChanges[t.id] = d;
   }
   for (const t of before.toilets) {
     if (!afterById.has(t.id)) removedToilets.push(t);
@@ -358,11 +380,13 @@ export function diffStores(before: DbFile, after: DbFile): DbDiff {
 }
 
 export function isDiffEmpty(diff: DbDiff): boolean {
+  const noReviewChange = (d: ReviewDelta) =>
+    d.added.length === 0 && d.removed.length === 0 && d.modified.length === 0;
   return (
     diff.addedToilets.length === 0 &&
     diff.removedToilets.length === 0 &&
-    Object.keys(diff.toiletReviewChanges).length === 0 &&
-    Object.keys(diff.externalReviewChanges).length === 0 &&
+    Object.values(diff.toiletReviewChanges).every(noReviewChange) &&
+    Object.values(diff.externalReviewChanges).every(noReviewChange) &&
     diff.addedReports.length === 0 &&
     diff.removedReports.length === 0 &&
     diff.addedVotes === 0 &&
@@ -375,6 +399,7 @@ export interface CountSummary {
   removedToilets: number;
   addedReviews: number; // コミュニティ + 外部
   removedReviews: number;
+  modifiedReviews: number; // 同一IDの内容変更（#111）
   addedReports: number;
   removedReports: number;
   addedVotes: number;
@@ -384,19 +409,23 @@ export interface CountSummary {
 export function countDiff(diff: DbDiff): CountSummary {
   let addedReviews = 0;
   let removedReviews = 0;
+  let modifiedReviews = 0;
   for (const d of Object.values(diff.toiletReviewChanges)) {
     addedReviews += d.added.length;
     removedReviews += d.removed.length;
+    modifiedReviews += d.modified.length;
   }
   for (const d of Object.values(diff.externalReviewChanges)) {
     addedReviews += d.added.length;
     removedReviews += d.removed.length;
+    modifiedReviews += d.modified.length;
   }
   return {
     addedToilets: diff.addedToilets.length,
     removedToilets: diff.removedToilets.length,
     addedReviews,
     removedReviews,
+    modifiedReviews,
     addedReports: diff.addedReports.length,
     removedReports: diff.removedReports.length,
     addedVotes: diff.addedVotes,
@@ -480,10 +509,12 @@ export function formatDiff(diff: DbDiff, opts: FormatOptions = {}): string {
       const name = section.startsWith("外部")
         ? fid
         : diff.addedToilets.find((t) => t.id === fid)?.name ?? fid;
-      out.push(`  ${fid}（${name}）: +${d.added.length} / -${d.removed.length}`);
+      out.push(`  ${fid}（${name}）: +${d.added.length} / -${d.removed.length}${d.modified.length > 0 ? ` / ~${d.modified.length}変更` : ""}`);
       if (!countsOnly) {
         for (const r of d.added) out.push(`    + ${fmtReview(r)}`);
         for (const r of d.removed) out.push(`    - ${fmtReview(r)}`);
+        for (const m of d.modified)
+          out.push(`    ~ ${fmtReview(m.before)}  =>  ${fmtReview(m.after)}`);
       }
     }
   }
@@ -527,6 +558,9 @@ export function buildCommitSubject(diff: DbDiff): string | null {
   }
   if (c.addedReviews > 0 || c.removedReviews > 0) {
     parts.push(`口コミ+${c.addedReviews}/-${c.removedReviews}`);
+  }
+  if (c.modifiedReviews > 0) {
+    parts.push(`口コミ内容変更${c.modifiedReviews}件`);
   }
   if (c.addedReports > 0 || c.removedReports > 0) {
     parts.push(`通報+${c.addedReports}/-${c.removedReports}`);

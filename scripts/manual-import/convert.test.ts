@@ -199,4 +199,35 @@ describe("convertItems", () => {
     });
     expect(bad.facilities[0].surveyedAt).toBeUndefined();
   });
+
+  it("gives same-name facilities distinct ids without place_id (#111)", async () => {
+    const mkNoPlace = (address: string) => ({
+      ...base,
+      name: "中央公園",
+      address,
+      googleMapsUrl: "https://www.google.com/maps/search/?api=1&query=35.6,139.7",
+    });
+    const { facilities } = await convertItems(
+      [mkNoPlace("東京都A区1-1"), mkNoPlace("東京都B区2-2")],
+      { geocode: noGeo }
+    );
+    expect(facilities).toHaveLength(2);
+    expect(facilities[0].id).not.toBe(facilities[1].id);
+    for (const f of facilities) expect(f.id.length).toBeLessThanOrEqual(80);
+  });
+
+  it("keeps long place_ids unique within 80 chars (#111)", async () => {
+    const longA = "ChIJ" + "A".repeat(100);
+    const longB = "ChIJ" + "A".repeat(99) + "B";
+    const { facilities } = await convertItems(
+      [
+        { ...base, name: "X", googleMapsUrl: `https://x/?q=place_id:${longA}` },
+        { ...base, name: "Y", googleMapsUrl: `https://x/?q=place_id:${longB}` },
+      ],
+      { geocode: noGeo }
+    );
+    expect(facilities).toHaveLength(2);
+    expect(facilities[0].id).not.toBe(facilities[1].id);
+    for (const f of facilities) expect(f.id.length).toBeLessThanOrEqual(80);
+  });
 });
