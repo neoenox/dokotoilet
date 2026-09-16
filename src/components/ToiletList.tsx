@@ -66,6 +66,7 @@ export const ToiletList: React.FC<ToiletListProps> = ({
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-faint" />
           <input
             type="text"
+            aria-label="施設名・駅名・地名で検索"
             placeholder="施設名・駅名・地名で検索..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -102,6 +103,17 @@ export const ToiletList: React.FC<ToiletListProps> = ({
                 }`}
               >
                 近い順
+              </button>
+              <button
+                type="button"
+                onClick={() => onSortChange('reviews')}
+                className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-all ${
+                  sortOption === 'reviews'
+                    ? 'bg-white text-accent font-bold shadow-xs'
+                    : 'text-muted hover:text-ink'
+                }`}
+              >
+                口コミ順
               </button>
             </div>
           ) : (
@@ -141,7 +153,20 @@ export const ToiletList: React.FC<ToiletListProps> = ({
             const unscored = shown.grade === null || shown.score === null;
             const gradeColor = getGradeColor(shown.grade);
             const isSelected = selectedToilet?.id === toilet.id;
-            const attrs = toilet.attributes || ({} as any);
+            const attrs = toilet.attributes ?? {
+              hasWashlet: null,
+              hasMultipurpose: null,
+              hasBabyTable: null,
+              hasNursingRoom: null,
+              hasPowderRoom: null,
+              hasOstomate: null,
+              isFree: null,
+              isOpen24h: null,
+              hasSoap: null,
+              hasAlcohol: null,
+              hasPaperTowelOrDryer: null,
+              toiletStyle: null,
+            };
 
             const distMeters = referenceLocation
               ? calculateDistanceMeters(
@@ -155,7 +180,16 @@ export const ToiletList: React.FC<ToiletListProps> = ({
             return (
               <div
                 key={toilet.id}
+                role="button"
+                tabIndex={0}
+                aria-label={`${toilet.name}の詳細を表示`}
                 onClick={() => onSelectToilet(toilet)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelectToilet(toilet);
+                  }
+                }}
                 className={`p-3 rounded-xl border cursor-pointer transition-all duration-150 text-xs ${
                   isSelected
                     ? 'bg-surface border-accent shadow-[0_4px_14px_rgba(11,110,82,0.14)] ring-1 ring-accent'

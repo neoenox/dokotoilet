@@ -12,6 +12,7 @@ export type DataSourceType =
   | 'google'    // Google Maps / Places API
   | 'osm'       // OpenStreetMap (amenity=toilets)
   | 'opendata'  // 自治体オープンデータ (東京都等)
+  | 'manual'    // 手動調査（公式フロアガイド・現地確認ベース。OD/OSM由来ではない）
   | 'community';// コミュニティ・ユーザー報告
 
 /** 設備の存在状態: true=あり / false=なし / null=未確認（不明）。
@@ -34,10 +35,10 @@ export interface ToiletAttributes {
 }
 
 export interface SubScores {
-  cleanliness: number; // 便器・床の清潔度 (1.0 - 5.0)
-  odor: number;        // におい・消臭状態 (1.0 - 5.0)
-  supplies: number;    // 備品充実度 (石鹸・ペーパー・除菌) (1.0 - 5.0)
-  comfort: number;     // 快適度・広さ・照明 (1.0 - 5.0)
+  cleanliness: number | null; // 便器・床の清潔度 (1.0 - 5.0)。null=未評価
+  odor: number | null;        // におい・消臭状態 (1.0 - 5.0)。null=未評価
+  supplies: number | null;    // 備品充実度 (石鹸・ペーパー・除菌) (1.0 - 5.0)。null=未評価
+  comfort: number | null;     // 快適度・広さ・照明 (1.0 - 5.0)。null=未評価
 }
 
 export interface ToiletReview {
@@ -76,14 +77,16 @@ export interface ToiletFacility {
   floorInfo?: string;
   // 実測レビューの「清潔さ次元」平均のランク・スコア。reviewCount === 0 の場合は
   // 設備推定値/Google手動調査値を表示用に入れ、UI上は「調査」「推定」タグ付きの
-  // グレードとして扱うこと（displayGrade/evaluationKind参照）
-  cleanlinessGrade: CleanlinessGrade;
-  cleanlinessScore: number; // 1.0 - 5.0（便器・床の清潔さの実測平均）
+  // グレードとして扱うこと（displayGrade/evaluationKind参照）。
+  // null は未評価（コミュニティ登録直後など口コミ0件で推定値も無い状態）。
+  // 呼び出し側は必ず null を「未評価」表示として扱うこと。
+  cleanlinessGrade: CleanlinessGrade | null;
+  cleanlinessScore: number | null; // 1.0 - 5.0（便器・床の清潔さの実測平均）。null=未評価
   /** 総合満足度の実測平均（口コミ1件以上で設定。0件は未定義＝未評価） */
   overallScore?: number;
-  // 設備タグからの推定ランク・スコア（実測ではない）
-  equipmentGrade: CleanlinessGrade;
-  equipmentScore: number; // 1.0 - 5.0
+  // 設備タグからの推定ランク・スコア（実測ではない）。null=未評価
+  equipmentGrade: CleanlinessGrade | null;
+  equipmentScore: number | null; // 1.0 - 5.0
   // 設備推定の内訳（口コミ表示は reviews から次元別に導出。comfort は入力項目が
   // ないため常にこの推定値）
   subScores: SubScores;
@@ -95,7 +98,9 @@ export interface ToiletFacility {
   reviewCount: number;
   reviews: ToiletReview[];
   // 外部（Google Maps等）のlisting上に表示される口コミ総数。未取得でも件数だけ
-  // 記録し、「口コミなし」と「未取込」を区別するために使う。undefined＝不明
+  // 記録し、「口コミなし」と「未取込」を区別するために使う。undefined＝不明。
+  // 注意：大型商業施設の件数は建物全体の口コミ数（トイレ単体ではない）の場合が
+  // ある。UIでは「関連口コミ」と表記し、1000件以上は建物全体の可能性を注記する。
   externalReviewCount?: number;
   externalReviewSource?: string;
   // 手動調査の実施日（YYYY-MM-DD）。調査評価の鮮度表示に使う。undefined＝不明

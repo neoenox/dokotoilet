@@ -24,6 +24,13 @@ describe("normalizeDedupText", () => {
   it("keeps distinct comments distinct", () => {
     expect(normalizeDedupText("clean toilet")).not.toBe(normalizeDedupText("dirty toilet"));
   });
+
+  it("canonicalizes composed/decomposed forms to the same key (NFC)", () => {
+    // é（合成済み U+00E9）と e + 結合鋭アクセント（U+0065 U+0301）は同一視する
+    expect(normalizeDedupText("caf\u00e9")).toBe(normalizeDedupText("cafe\u0301"));
+    // ハングル Jamo 分解形と合成済みも同一視する
+    expect(normalizeDedupText("가")).toBe(normalizeDedupText("\u1100\u1161"));
+  });
 });
 
 describe("reviewDedupId", () => {

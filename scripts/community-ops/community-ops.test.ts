@@ -18,6 +18,7 @@ import type { DbFile, FacilityEntry, ReportEntry, ReviewEntry } from "./store";
 import {
   buildCommitBody,
   buildCommitSubject,
+  countDiff,
   diffStores,
   emptyDb,
   formatDiff,
@@ -400,6 +401,35 @@ describe("diffStores", () => {
     const diff = diffStores(d, d);
     expect(isDiffEmpty(diff)).toBe(true);
     expect(buildCommitSubject(diff)).toBeNull();
+  });
+
+  it("detects same-id content changes as modified, not silent (#111)", () => {
+    const beforeOnly = db({
+      toilets: [
+        facility("toilet-user-A", "既存A", [rev("r1"), rev("r9", { comment: "元の本文", rating: 5 })]),
+      ],
+      helpfulVotes: {},
+      reports: [],
+      externalReviews: {},
+    });
+    const afterOnly = db({
+      toilets: [
+        facility("toilet-user-A", "既存A", [rev("r1"), rev("r9", { comment: "改竄された本文", rating: 1 })]),
+      ],
+      helpfulVotes: {},
+      reports: [],
+      externalReviews: {},
+    });
+    const diff = diffStores(beforeOnly, afterOnly);
+    expect(diff.toiletReviewChanges["toilet-user-A"].added).toEqual([]);
+    expect(diff.toiletReviewChanges["toilet-user-A"].removed).toEqual([]);
+    const mod = diff.toiletReviewChanges["toilet-user-A"].modified;
+    expect(mod).toHaveLength(1);
+    expect(mod[0].before.comment).toBe("元の本文");
+    expect(mod[0].after.comment).toBe("改竄された本文");
+    expect(isDiffEmpty(diff)).toBe(false);
+    expect(countDiff(diff).modifiedReviews).toBe(1);
+    expect(buildCommitSubject(diff)).toContain("内容変更");
   });
 
   it("detects vote removal (manual curation)", () => {

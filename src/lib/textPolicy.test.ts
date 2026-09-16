@@ -33,8 +33,8 @@ describe("TEXT_FIELDS policy table", () => {
     expect(TEXT_FIELDS.comment.urlError).toBe("comment must not contain URLs");
     expect(TEXT_FIELDS.reason.urlError).toBe("reason must not contain URLs");
     expect(TEXT_FIELDS.toiletName.urlError).toBe("name must not contain URLs");
-    // userName はURL検出の対象外（旧実装どおり。urlError 欄自体が存在しない）
-    expect("urlError" in TEXT_FIELDS.userName).toBe(false);
+    // userName はURL検出の対象（#108: 表示名スパム対策。検出時は拒否する）
+    expect(TEXT_FIELDS.userName.urlError).toBe("userName must not contain URLs");
   });
 
   it("uses unique field labels and consistent dispositions", () => {

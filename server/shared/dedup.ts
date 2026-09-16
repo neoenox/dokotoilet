@@ -18,9 +18,16 @@ import crypto from "node:crypto";
  * 同一視してよい（JSON バックエンドが長年使ってきた規約）。
  */
 
-/** 重複判定用のコメント正規形。JSON / Firestore 両バックエンドで共有する。 */
+/** 重複判定用のコメント正規形。JSON / Firestore 両バックエンドで共有する。
+ * 比較前に NFC で正準化する（合成済み/分解済みの表記揺れでガードを
+ * すり抜ける手口を塞ぐ）。保存テキスト自体は textPolicy 通り NFC しない
+ *（表示忠実性のため）。ここは比較専用の正規形である。 */
 export function normalizeDedupText(v: string): string {
-  return v.trim().replace(/\s+/g, " ").toLowerCase();
+  return v
+    .normalize("NFC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 /**

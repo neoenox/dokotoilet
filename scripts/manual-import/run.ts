@@ -57,10 +57,17 @@ for (const p of inPaths) {
 
 // Nominatimポリシー遵守: 逐次＋1.2秒間隔
 let geocoded = 0;
+const unguarded: { name: string; reason: string }[] = [];
 const matchedBy: Record<string, number> = {};
 const guardRejected: string[] = [];
 const { facilities, skipped, warnings } = await convertItems(items, {
   geocode: async ({ name, address, geoQuery, guard }) => {
+    // ガードなし旧形式のジオコーディングは同名異地の誤配置を防げないため
+    // 取込不可にする（座標ありの項目は geocode 自体が呼ばれないため影響なし。#111）
+    if (!guard || !(guard.maxKm < Number.POSITIVE_INFINITY)) {
+      unguarded.push({ name, reason: "ガードなし旧形式のためジオコーディング不可（座標を調査値で補完すること）" });
+      return null;
+    }
     await sleep(1200);
     const g = await geocodeBestEffort(name, address, geoQuery);
     if (g) {
@@ -90,5 +97,6 @@ await writeFile(outPath, header + JSON.stringify(facilities, null, 2) + "\n", "u
 console.log(`input: ${items.length}件 / geocoded: ${geocoded}件 ${JSON.stringify(matchedBy)}`);
 console.log(`wrote: ${outPath}（${facilities.length}件）`);
 for (const s of skipped) console.log(`skip: ${s.name} — ${s.reason}`);
+for (const u of unguarded) console.log(`skip(unguarded): ${u.name} — ${u.reason}`);
 for (const w of warnings) console.log(`warn: ${w.name} — ${w.reason}`);
 for (const r of guardRejected) console.log(`guard-reject: ${r}`);
