@@ -786,6 +786,18 @@ export default function App() {
           );
         },
         getToilets: () => toiletsRef.current,
+        removePendingReviewFromState: (facilityId, reviewId) => {
+          setToilets((prev) =>
+            prev.map((t) =>
+              t.id === facilityId
+                ? recomputeFromReviews(
+                    t,
+                    t.reviews.filter((review) => review.id !== reviewId)
+                  )
+                : t
+            )
+          );
+        },
       });
     };
     flush();
