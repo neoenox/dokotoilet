@@ -7,6 +7,7 @@ import {
   enqueuePendingVote,
   loadPendingReviews,
   loadPendingVotes,
+  pendingQueueAction,
   removePendingReview,
   removePendingVote,
   clearStoredUserData,
@@ -70,5 +71,29 @@ describe('pending queue (D)', () => {
     localStorage.setItem(PENDING_VOTES_KEY, JSON.stringify([{ nope: 1 }]));
     expect(loadPendingReviews()).toEqual([]);
     expect(loadPendingVotes()).toEqual([]);
+  });
+});
+
+describe('pendingQueueAction (README「未同期キュー（D）」の処置判定)', () => {
+  it('2xx は sync（応答を反映してキューから外す）', () => {
+    expect(pendingQueueAction({ ok: true, status: 200 })).toBe('sync');
+    expect(pendingQueueAction({ ok: true, status: 201 })).toBe('sync');
+  });
+
+  it('4xx 確定拒否（400/404/409/429）は discard（再送しない）', () => {
+    expect(pendingQueueAction({ ok: false, status: 400 })).toBe('discard');
+    expect(pendingQueueAction({ ok: false, status: 404 })).toBe('discard');
+    expect(pendingQueueAction({ ok: false, status: 409 })).toBe('discard');
+    expect(pendingQueueAction({ ok: false, status: 429 })).toBe('discard');
+  });
+
+  it('5xx は keep（次回へ持ち越し）', () => {
+    expect(pendingQueueAction({ ok: false, status: 500 })).toBe('keep');
+    expect(pendingQueueAction({ ok: false, status: 502 })).toBe('keep');
+    expect(pendingQueueAction({ ok: false, status: 503 })).toBe('keep');
+  });
+
+  it('status 不明は安全側で keep（破棄は確定応答のみ）', () => {
+    expect(pendingQueueAction({ ok: false })).toBe('keep');
   });
 });

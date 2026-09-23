@@ -349,6 +349,30 @@ export function enqueuePendingVote(item: PendingVote): PendingVote[] {
   return next;
 }
 
+/**
+ * 再送HTTP結果 → キュー処置の唯一の判定（README「未同期キュー（D）」の実装）。
+ *
+ * - "sync": 2xx。サーバー応答を状態へ反映し、キューから外す
+ * - "discard": サーバー応答ありの確定拒否（400/404/409/429 などの4xx）。重複投稿・
+ *   未発見（モデレーション済みレビューへの投票）・バリデーション・レート制限など、
+ *   再送しても結果が変わらないため破棄する（README: 「サーバー応答ありの拒否は
+ *   再送しない」）
+ * - "keep": 5xx。サーバー側の一時的問題の可能性があるため持ち越して再試行する
+ *
+ * ネットワーク断（fetch 自体の失敗）は Response を介さないためこの関数には届かず、
+ * 呼び出し側の catch で keep（持ち越し）になる。
+ * status が不明で ok=false の場合は安全側に keep（破棄は確定応答のみに限定）。
+ */
+export type PendingQueueAction = "sync" | "discard" | "keep";
+
+export function pendingQueueAction(res: { ok: boolean; status?: number }): PendingQueueAction {
+  if (res.ok) return "sync";
+  const status = res.status;
+  if (typeof status !== "number") return "keep";
+  if (status >= 500) return "keep";
+  return "discard";
+}
+
 export function removePendingReview(reviewId: string): void {
   savePending(
     PENDING_REVIEWS_KEY,

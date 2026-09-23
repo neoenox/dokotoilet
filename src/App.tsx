@@ -37,10 +37,6 @@ import {
   enqueuePendingReview,
   enqueuePendingVote,
   extractDelta,
-  loadPendingReviews,
-  loadPendingVotes,
-  removePendingReview,
-  removePendingVote,
   LOCAL_DELTA_KEY,
   LEGACY_TOILETS_V2_KEY,
   LEGACY_TOILETS_V3_KEY,
@@ -54,6 +50,7 @@ import {
   unionServerToilet,
   VOTED_REVIEWS_KEY,
 } from './lib/localDeltas';
+import { flushPendingQueue } from './lib/pendingFlush';
 import { Header } from './components/Header';
 import { ToiletMap } from './components/ToiletMap';
 import { ToiletList } from './components/ToiletList';
@@ -772,66 +769,24 @@ export default function App() {
     }
   };
 
-  // D: 未同期キューの再送（起動1回 + online復帰時）。成功分だけキューから外す
+  // D: 未同期キューの再送（起動1回 + online復帰時）。
+  // 処置判定は pendingQueueAction に一本化: 2xxはサーバー応答を反映してキューから外す。
+  // サーバー応答ありの確定拒否（400/404/409 など。重複投稿・モデレーション済みレビュー
+  // への投票など）はキューから破棄し再送しない。5xxとネットワーク断のみ次回へ持ち越し
+  //（README「未同期キュー（D）」の規定どおり）。
   useEffect(() => {
     let cancelled = false;
     const flush = async () => {
-      for (const p of loadPendingReviews()) {
-        if (cancelled) return;
-        try {
-          const res = await fetch(
-            `/api/community/toilets/${encodeURIComponent(p.facilityId)}/reviews`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ review: p.review }),
-            }
+      await flushPendingQueue({
+        applyToilet: (updated) => {
+          if (cancelled) return;
+          noteServerFacility(updated.id, (updated.reviews ?? []).map((r) => r.id));
+          setToilets((prev) =>
+            prev.map((t) => (t.id === updated.id ? unionServerToilet(t, updated) : t))
           );
-          if (!res.ok) continue;
-          const outcome = await classifyReviewResponse(res, p.facilityId);
-          if (outcome.kind === 'server-toilet') {
-            const updated = outcome.toilet;
-            noteServerFacility(updated.id, (updated.reviews ?? []).map((r) => r.id));
-            setToilets((prev) =>
-              prev.map((t) => (t.id === p.facilityId ? unionServerToilet(t, updated) : t))
-            );
-            removePendingReview(p.review.id);
-          } else if (outcome.kind === 'server-external') {
-            externalReviewsRef.current = {
-              ...externalReviewsRef.current,
-              [p.facilityId]: outcome.reviews,
-            };
-            noteReviewsKnown(p.facilityId, outcome.reviews.map((r) => r.id));
-            setToilets((prev) =>
-              prev.map((t) =>
-                t.id === p.facilityId ? overlayExternalReviews(t, outcome.reviews) : t
-              )
-            );
-            removePendingReview(p.review.id);
-          }
-        } catch {
-          /* まだオフライン: 次回に持ち越し */
-        }
-      }
-      for (const v of loadPendingVotes()) {
-        if (cancelled) return;
-        try {
-          const res = await fetch(
-            `/api/community/reviews/${encodeURIComponent(v.reviewId)}/helpful`,
-            { method: 'POST' }
-          );
-          if (!res.ok) continue;
-          const data = await res.json().catch(() => null);
-          if (data && typeof data.helpfulCount === 'number') {
-            setToilets((prev) =>
-              prev.map((t) => setHelpfulCount(t, v.toiletId, v.reviewId, data.helpfulCount))
-            );
-          }
-          removePendingVote(v.reviewId);
-        } catch {
-          /* 次回に持ち越し */
-        }
-      }
+        },
+        getToilets: () => toiletsRef.current,
+      });
     };
     flush();
     const onOnline = () => flush();
