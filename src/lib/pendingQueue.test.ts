@@ -80,11 +80,14 @@ describe('pendingQueueAction (README「未同期キュー（D）」の処置判�
     expect(pendingQueueAction({ ok: true, status: 201 })).toBe('sync');
   });
 
-  it('4xx 確定拒否（400/404/409/429）は discard（再送しない）', () => {
+  it('4xx 確定拒否（400/404/409）は discard（再送しない・429を除く）', () => {
     expect(pendingQueueAction({ ok: false, status: 400 })).toBe('discard');
     expect(pendingQueueAction({ ok: false, status: 404 })).toBe('discard');
     expect(pendingQueueAction({ ok: false, status: 409 })).toBe('discard');
-    expect(pendingQueueAction({ ok: false, status: 429 })).toBe('discard');
+  });
+
+  it('429（レート制限）は keep（制限解除後の再送で成功しうる）', () => {
+    expect(pendingQueueAction({ ok: false, status: 429 })).toBe('keep');
   });
 
   it('5xx は keep（次回へ持ち越し）', () => {
