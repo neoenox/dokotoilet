@@ -87,11 +87,14 @@ describe('pendingQueueAction (README「未同期キュー（D）」の判定)', 
     expect(pendingQueueAction({ ok: true, status: 201 })).toBe('sync');
   });
 
-  it('4xx 確定拒否（400/404/409/429）は discard', () => {
+  it('4xx 確定拒否（400/404/409）は discard（429を除く）', () => {
     expect(pendingQueueAction({ ok: false, status: 400 })).toBe('discard');
     expect(pendingQueueAction({ ok: false, status: 404 })).toBe('discard');
     expect(pendingQueueAction({ ok: false, status: 409 })).toBe('discard');
-    expect(pendingQueueAction({ ok: false, status: 429 })).toBe('discard');
+  });
+
+  it('429（レート制限）は keep（制限解除後の再送で成功しうる）', () => {
+    expect(pendingQueueAction({ ok: false, status: 429 })).toBe('keep');
   });
 
   it('5xx は keep（再送）', () => {
@@ -150,6 +153,19 @@ describe('flushPendingQueue (4xx破棄・5xx保持)', () => {
     enqueuePendingReview({ facilityId: 'osm-node-1', review: review('r1'), queuedAt: 'x' });
     enqueuePendingVote({ toiletId: 't1', reviewId: 'r9', queuedAt: 'x' });
     mockFetch(() => jsonResponse(502, { error: 'upstream unavailable' }));
+
+    const result = await flushPendingQueue({ applyToilet: () => {}, getToilets: () => [] });
+
+    expect(loadPendingReviews()).toHaveLength(1);
+    expect(loadPendingVotes()).toHaveLength(1);
+    expect(result.keptReviews).toBe(1);
+    expect(result.keptVotes).toBe(1);
+  });
+
+  it('429（レート制限）もキューに保持して次回へ持ち越す', async () => {
+    enqueuePendingReview({ facilityId: 'osm-node-1', review: review('r1'), queuedAt: 'x' });
+    enqueuePendingVote({ toiletId: 't1', reviewId: 'r9', queuedAt: 'x' });
+    mockFetch(() => jsonResponse(429, { error: 'too many requests' }));
 
     const result = await flushPendingQueue({ applyToilet: () => {}, getToilets: () => [] });
 
