@@ -132,6 +132,8 @@ bun start        # 本番起動（dist/server.cjs）
 - PWA オフライン（E）: OSM/国土地理院タイルは CacheFirst（各200枚・30日）、
   `GET /api/community/toilets` は NetworkFirst（5秒タイムアウト→キャッシュ表示）。
   アプリ shell は precache 済み。
+  未登録の `/api/*` パスは SPA フォールバックに落ちず JSON 404 を返す
+  （APIクライアントの `res.ok` 判定とオフライン再送キューの処置判定を安定させる）。
 - 口コミはコミュニティ登録トイレに加え、OSM取得・Google手動調査・自治体ODの施設
   （`osm-*` / `google-*` / `od-*`）へも投稿でき、他端末と共有される（M5対応）。
   フロントは起動時に `externalReviews` を取得してシード施設へ重ねる。

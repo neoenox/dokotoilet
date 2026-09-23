@@ -744,6 +744,7 @@ export class CommunityStore {
         r.adminNote = r.resolution;
       }
       await atomicWriteFile(this.filePath, JSON.stringify(db));
+      await this.refreshCacheAfterWrite(db);
       return { found: true, report: { ...r } };
     });
   }
@@ -794,6 +795,7 @@ export class CommunityStore {
         delete db.helpfulVotes[reviewId];
         markReports();
         await atomicWriteFile(this.filePath, JSON.stringify(db));
+        await this.refreshCacheAfterWrite(db);
         return {
           found: true,
           facilityId: t.id,
@@ -808,6 +810,7 @@ export class CommunityStore {
           delete db.helpfulVotes[reviewId];
           markReports();
           await atomicWriteFile(this.filePath, JSON.stringify(db));
+          await this.refreshCacheAfterWrite(db);
           return {
             found: true,
             facilityId: fid,
