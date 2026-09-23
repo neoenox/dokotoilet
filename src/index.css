@@ -104,6 +104,28 @@
   filter: brightness(0.65) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7);
 }
 
+/* トイレマーカーの選択ハイライト。
+   選択変更時は divIcon を再構築せず、この .is-selected の付け替えのみで表現する
+   （数百施設でクリック毎に全ピンを再構築しない最適化。旧実装相当の見た目を維持:
+   拡大＋最前面＋アクセントリング＋影）。 */
+.custom-toilet-marker.is-selected {
+  z-index: 1000;
+}
+.custom-toilet-marker.is-selected .toilet-marker-root {
+  transform: scale(1.25);
+  filter: drop-shadow(0 2px 12px rgba(27, 40, 33, 0.35));
+}
+.custom-toilet-marker.is-selected .toilet-marker-plate {
+  --tw-ring-color: var(--color-accent);
+  --tw-ring-offset-color: #ffffff;
+  box-shadow:
+    0 0 0 2px var(--color-accent),
+    0 0 0 4px #ffffff;
+}
+.custom-toilet-marker:not(.is-selected):hover .toilet-marker-root {
+  transform: scale(1.1);
+}
+
 .leaflet-bar {
   border: 1px solid var(--color-line) !important;
   box-shadow: 0 6px 16px rgba(27, 40, 33, 0.12) !important;
