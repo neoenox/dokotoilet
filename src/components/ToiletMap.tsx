@@ -92,7 +92,14 @@ interface ToiletMapProps {
 }
 
 // 実測評価判定とグレード配色は src/lib/grade.ts へ移動（ToiletList / ToiletDetails と共有）
-import { displayGrade, evaluationKindLabel, getGradeColor } from '../lib/grade';
+// マーカーHTML・選択ハイライトの付け替えは src/lib/toiletMapMarkers.ts へ一本化
+import {
+  MARKER_SELECTED_CLASS,
+  buildMarkerHtml,
+  markerClassForId,
+  markerTitleFor,
+  selectionChangedMarkerClasses,
+} from '../lib/toiletMapMarkers';
 
 export const ToiletMap: React.FC<ToiletMapProps> = ({
   toilets,
@@ -230,59 +237,56 @@ export const ToiletMap: React.FC<ToiletMapProps> = ({
   }, [center.lat, center.lng, zoom]);
 
   // Render Leaflet Markers
+  // toilets 変化時のみ（再）構築する（deps に selectedToilet を含めない）。
+  // 選択変更は下の selection effect が該当2要素の DOM クラスだけを付け替える
+  // （O(n)再構築・全ピンの一瞬消えるちらつきを防ぐ）。
+  const selectedIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!leafletMapRef.current || !markersGroupRef.current) return;
     markersGroupRef.current.clearLayers();
 
     toilets.forEach((toilet) => {
-      const isSelected = selectedToilet?.id === toilet.id;
-      // 口コミ0件でも調査/推定グレードを表示する（初期状態のマップに意味を持たせる）。
-      // 実測以外は少し薄くして出所の違いが分かるようにする
-      const shown = displayGrade(toilet);
-      const colorInfo = getGradeColor(shown.grade);
-      // 未スコア（コミュニティ登録直後）はグレード無し。 plate には「?」を出す
-      const unscored = shown.grade === null || shown.score === null;
-      const gradeLetter = unscored ? '?' : shown.grade;
-      const dimmed = shown.kind !== 'measured' ? 'opacity-80 saturate-[.65]' : '';
-
       const customIcon = L.divIcon({
         className: 'custom-toilet-marker',
-        html: `
-          <div class="relative group cursor-pointer transition-transform duration-200 ${dimmed} ${
-            isSelected ? 'scale-125 z-50' : 'hover:scale-110 z-10'
-          }">
-            <div class="flex items-center justify-center w-8 h-8 rounded-full shadow-lg text-white font-bold text-xs ${
-              colorInfo.bg
-            } ring-2 ${
-          isSelected
-            ? 'ring-accent ring-offset-2 ring-offset-white shadow-[0_2px_12px_rgba(27,40,33,0.35)]'
-            : shown.kind !== 'measured'
-              ? 'ring-slate-200'
-              : 'ring-white'
-        }">
-              ${gradeLetter}
-            </div>
-            <div class="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 rotate-45 ${
-              colorInfo.bg
-            }"></div>
-          </div>
-        `,
+        html: buildMarkerHtml(toilet),
         iconSize: [32, 36],
         iconAnchor: [16, 36],
       });
 
       const marker = L.marker([toilet.lat, toilet.lng], {
         icon: customIcon,
-        title: unscored
-          ? `${toilet.name}（未評価・口コミ募集中）`
-          : `${toilet.name}（${evaluationKindLabel(shown.kind)} ${gradeLetter}級）`,
+        title: markerTitleFor(toilet),
       });
       marker.on('click', () => {
         // 最新のハンドラを使う（ref経由。effectの再実行を防ぐため deps に入れない）
         onSelectToiletRef.current(toilet);
       });
       markersGroupRef.current?.addLayer(marker);
+      // Leaflet が生成した要素へ識別クラスを付与（selection effect の検索キー）
+      marker.getElement()?.classList.add(markerClassForId(toilet.id));
     });
+    // 選択状態は selection effect が現在の selectedIdRef との差分で再適用するため、
+    // ここでは触らない（選択中の施設がリストから消えた場合も次の effect で解決）
+  }, [toilets]);
+
+  // 選択変更の反映: 旧・新の2要素だけクラスを付け替える（toilets 再構築後も走るので、
+  // 新しく作られたマーカー要素にも選択状態が正しく反映される）。
+  useEffect(() => {
+    const group = markersGroupRef.current;
+    if (!group) return;
+    const prevId = selectedIdRef.current;
+    const nextId = selectedToilet?.id ?? null;
+    if (prevId === nextId) return; // 変化なし
+    const updates = selectionChangedMarkerClasses(prevId, nextId);
+    for (const { className, selected } of updates) {
+      group.eachLayer((layer) => {
+        const el = (layer as L.Marker).getElement?.();
+        if (el?.classList.contains(className)) {
+          el.classList.toggle(MARKER_SELECTED_CLASS, selected);
+        }
+      });
+    }
+    selectedIdRef.current = nextId;
   }, [toilets, selectedToilet?.id]);
 
   // Render User Location Marker (Pulsing GPS dot)
