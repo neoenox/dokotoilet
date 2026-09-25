@@ -54,7 +54,10 @@ async function readJsonWithLimit(res: globalThis.Response, maxBytes: number): Pr
   const reader = res.body?.getReader();
   if (!reader) {
     const text = await res.text();
-    if (text.length > maxBytes) throw new Error(`response too large (${text.length} bytes)`);
+    // text.length は UTF-16 コード単位のため、マルチバイト応答で実バイト数を
+    // 上限より小さく見積もる。reader 経由の計数と単位を揃える（#109 レビュー）。
+    const byteLength = Buffer.byteLength(text);
+    if (byteLength > maxBytes) throw new Error(`response too large (${byteLength} bytes)`);
     return JSON.parse(text);
   }
   const chunks: Uint8Array[] = [];
@@ -217,9 +220,7 @@ async function startServer() {
       }
 
       // node と way を対象にして relation（広域境界等）を除外し、Overpassの再帰負荷とタイムアウトを大幅低減
-      // Honor the server-validated client radius (up to 3 km) so the returned data
-      // matches the search range shown by the UI.
-      const liveRadius = radius;
+      // Honor the server-validated client radius (up to 3 km) so the returned data\n      // matches the search range shown by the UI.\n      const liveRadius = radius;
       const overpassQuery = `[out:json][timeout:5];(node["amenity"="toilets"](around:${liveRadius},${lat},${lng});way["amenity"="toilets"](around:${liveRadius},${lat},${lng}););out center 80;`;
       const mirrors = [
         "https://lz4.overpass-api.de/api/interpreter",
@@ -555,6 +556,13 @@ async function startServer() {
       res.status(500).json({ error: "internal server error" });
     }
   );
+
+  // 未登録の /api/* は JSON 404 を返す（#109 レビュー）。
+  // SPAフォールバック（HTML 200）に落ちるとAPIクライアントの res.ok 判定が
+  // 崩れるため、静的配信より先に JSON で握りつぶす。
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "not found" });
+  });
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
