@@ -8,7 +8,7 @@ import {
   type PendingReview,
   type PendingVote,
 } from "./localDeltas";
-import { classifyReviewResponse } from "./uiState";
+import { classifyReviewResponse, isToiletFacilityLike } from "./uiState";
 import { setHelpfulCount } from "./helpfulVote";
 import { overlayExternalReviews } from "./externalReviews";
 
@@ -39,6 +39,8 @@ export interface PendingFlushHandlers {
   applyToilet(toilet: ToiletFacility): void;
   /** 現在の状態スナップショット（外部施設レビューのオーバーレイ先の取得に使用） */
   getToilets(): ToiletFacility[];
+  /** Remove the local optimistic copy when the server definitively rejects it. */
+  removePendingReviewFromState?(facilityId: string, reviewId: string): void;
 }
 
 /** 2xxでもHTML本文ならAPI未達の可能性（PWAシェル/SPAフォールバック）。キュー保持の対象。 */
@@ -72,6 +74,43 @@ async function flushOneReview(
   const action = pendingQueueAction(res);
   if (action === "keep") return;
   if (action === "discard") {
+    if (res.status === 409) {
+      // A lost 2xx response followed by a retry is reported as a duplicate.
+      // Reconcile with the server snapshot so we remove the optimistic ID but
+      // keep the review that the server accepted under its own ID.
+      try {
+        const snapshotRes = await fetch("/api/community/toilets");
+        if (!snapshotRes.ok) return;
+        const snapshot = await snapshotRes.json();
+        const communityToilet = Array.isArray(snapshot?.toilets)
+          ? snapshot.toilets.find(
+              (item: unknown) =>
+                isToiletFacilityLike(item) && item.id === p.facilityId
+            ) as ToiletFacility | undefined
+          : undefined;
+        if (communityToilet) {
+          handlers.removePendingReviewFromState?.(p.facilityId, p.review.id);
+          handlers.applyToilet(communityToilet);
+          result.discardedReviews += 1;
+          removePendingReview(p.review.id);
+          return;
+        }
+        const sharedReviews = snapshot?.externalReviews?.[p.facilityId];
+        const target = handlers.getToilets().find((t) => t.id === p.facilityId);
+        if (!Array.isArray(sharedReviews) || !target) return;
+        handlers.removePendingReviewFromState?.(p.facilityId, p.review.id);
+        const withoutPending = {
+          ...target,
+          reviews: target.reviews.filter((review) => review.id !== p.review.id),
+        };
+        handlers.applyToilet(overlayExternalReviews(withoutPending, sharedReviews));
+      } catch {
+        // Keep the queue if reconciliation failed; retry after connectivity returns.
+        return;
+      }
+    } else {
+      handlers.removePendingReviewFromState?.(p.facilityId, p.review.id);
+    }
     result.discardedReviews += 1;
     removePendingReview(p.review.id);
     return;

@@ -111,6 +111,8 @@ describe('pendingQueueAction (README「未同期キュー（D）」の判定)', 
 describe('flushPendingQueue (4xx破棄・5xx保持)', () => {
   it('400 確定拒否の未同期レビューをキューから破棄する', async () => {
     enqueuePendingReview({ facilityId: 'osm-node-1', review: review('r1'), queuedAt: 'x' });
+    const state = [toilet('osm-node-1')];
+    state[0]!.reviews = [review('r1')];
     const calls = mockFetch((url) =>
       url.includes('/reviews') ? jsonResponse(400, { error: 'invalid comment' }) : undefined
     );
@@ -118,24 +120,44 @@ describe('flushPendingQueue (4xx破棄・5xx保持)', () => {
     const applied: ToiletFacility[] = [];
     const result = await flushPendingQueue({
       applyToilet: (t) => applied.push(t),
-      getToilets: () => [],
+      getToilets: () => state,
+      removePendingReviewFromState: (facilityId, reviewId) => {
+        const target = state.find((t) => t.id === facilityId);
+        if (target) target.reviews = target.reviews.filter((r) => r.id !== reviewId);
+      },
     });
 
     expect(calls).toHaveLength(1);
     expect(loadPendingReviews()).toHaveLength(0);
     expect(result.discardedReviews).toBe(1);
     expect(applied).toHaveLength(0);
+    expect(state[0]?.reviews).toHaveLength(0);
   });
 
   it('409 重複拒否の未同期レビューも破棄する', async () => {
     enqueuePendingReview({ facilityId: 'osm-node-1', review: review('r1'), queuedAt: 'x' });
-    mockFetch((url) =>
-      url.includes('/reviews') ? jsonResponse(409, { error: 'duplicate review' }) : undefined
-    );
+    const accepted = review('server-review');
+    const state = [toilet('osm-node-1')];
+    state[0]!.reviews = [review('r1')];
+    mockFetch((url) => {
+      if (url.includes('/reviews')) return jsonResponse(409, { error: 'duplicate review' });
+      if (url === '/api/community/toilets') {
+        return jsonResponse(200, { externalReviews: { 'osm-node-1': [accepted] } });
+      }
+      return undefined;
+    });
 
-    const result = await flushPendingQueue({ applyToilet: () => {}, getToilets: () => [] });
+    const result = await flushPendingQueue({
+      applyToilet: (updated) => { state[0] = updated; },
+      getToilets: () => state,
+      removePendingReviewFromState: (facilityId, reviewId) => {
+        const target = state.find((t) => t.id === facilityId);
+        if (target) target.reviews = target.reviews.filter((r) => r.id !== reviewId);
+      },
+    });
     expect(loadPendingReviews()).toHaveLength(0);
     expect(result.discardedReviews).toBe(1);
+    expect(state[0]?.reviews.map((r) => r.id)).toEqual(['server-review']);
   });
 
   it('404（モデレーション済みレビューへの投票）の投票をキューから破棄する', async () => {

@@ -220,7 +220,9 @@ async function startServer() {
       }
 
       // node と way を対象にして relation（広域境界等）を除外し、Overpassの再帰負荷とタイムアウトを大幅低減
-      const liveRadius = Math.min(radius, 1200);
+      // Honor the server-validated client radius (up to 3 km) so the returned data
+      // matches the search range shown by the UI.
+      const liveRadius = radius;
       const overpassQuery = `[out:json][timeout:5];(node["amenity"="toilets"](around:${liveRadius},${lat},${lng});way["amenity"="toilets"](around:${liveRadius},${lat},${lng}););out center 80;`;
       const mirrors = [
         "https://lz4.overpass-api.de/api/interpreter",
