@@ -5,7 +5,7 @@
 // provisioned here; deployment/cutover remains a separate operational gate.
 
 import { Hono } from "hono";
-import type { D1Database } from "@cloudflare/workers-types";
+import type { D1Database, KVNamespace } from "@cloudflare/workers-types";
 
 import { canonicalizeExternalFacilityId } from "../src/lib/facilityIds";
 import { REAL_OSM_SEED } from "../src/data/realOsmSeed";
