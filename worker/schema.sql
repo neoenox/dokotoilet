@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS community_toilets (
   address TEXT NOT NULL DEFAULT '',
   floor_info TEXT,
   description TEXT NOT NULL DEFAULT '',
+  data_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS reviews (
   comment TEXT NOT NULL DEFAULT '',
   comment_hash TEXT NOT NULL DEFAULT '',
   ip_hash TEXT NOT NULL DEFAULT '',
+  helpful_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   deleted INTEGER NOT NULL DEFAULT 0
 );
@@ -60,11 +62,15 @@ CREATE INDEX IF NOT EXISTS idx_votes_review ON helpful_votes (review_id);
 
 CREATE TABLE IF NOT EXISTS reports (
   report_id TEXT PRIMARY KEY,
+  facility_id TEXT NOT NULL,
   review_id TEXT NOT NULL,
   reason TEXT NOT NULL DEFAULT '',
-  ip_hash TEXT NOT NULL DEFAULT '',
+  reason_norm TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'open',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  resolution TEXT,
+  admin_note TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_reports_status ON reports (status, created_at);
 
@@ -72,5 +78,6 @@ CREATE TABLE IF NOT EXISTS external_facilities (
   facility_id TEXT PRIMARY KEY,
   source TEXT NOT NULL,
   origin TEXT NOT NULL DEFAULT 'manual',
+  legacy_id TEXT,
   first_seen_at TEXT NOT NULL
 );
