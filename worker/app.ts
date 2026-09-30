@@ -264,7 +264,7 @@ app.post("/api/community/reviews/:reviewId/report", async (c) => {
   return c.json({ ok: true }, 201);
 });
 
-async function requireAdmin(c: Parameters<typeof app.get>[1] extends never ? never : any) {
+async function requireAdmin(c: any) {
   const expected = c.env.ADMIN_TOKEN?.trim();
   if (!expected) return c.json({ error: "not found" }, 404);
   const header = c.req.header("authorization");
