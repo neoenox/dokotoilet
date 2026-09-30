@@ -8,6 +8,18 @@ import { Hono } from "hono";
 import type { D1Database } from "@cloudflare/workers-types";
 
 import { canonicalizeExternalFacilityId } from "../src/lib/facilityIds";
+import { REAL_OSM_SEED } from "../src/data/realOsmSeed";
+import { estimateEquipmentScore } from "../src/lib/estimate";
+import {
+  formatOsmOpeningHours,
+  isTheTokyoToiletTags,
+  osmAttributesFromTags,
+  triFromFee,
+  triFromOpen24h,
+  triFromYesNo,
+} from "../src/lib/osm";
+import { isOsmElementType, osmFacilityId } from "../src/lib/osmIds";
+import { sanitizeText } from "../src/lib/textPolicy";
 import type { ToiletFacility } from "../src/types";
 import {
   validateReportInput,
@@ -27,6 +39,7 @@ export interface WorkerEnv {
   API_RATE_LIMITER?: RateLimitBinding;
   WRITE_RATE_LIMITER?: RateLimitBinding;
   VOTE_RATE_LIMITER?: RateLimitBinding;
+  OSM_CACHE?: KVNamespace;
 }
 
 type Variables = {
@@ -110,6 +123,268 @@ app.use("/api/*", async (c, next) => {
 app.get("/api/health", (c) =>
   c.json({ status: "ok", timestamp: new Date().toISOString() })
 );
+
+
+function parseQueryNumber(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^-?\d+(\.\d+)?$/.test(value.trim())) return Number.NaN;
+  return Number(value);
+}
+
+function withinRadius(
+  originLat: number,
+  originLng: number,
+  lat: number,
+  lng: number,
+  radiusMeters: number
+): boolean {
+  const toRad = (degree: number) => (degree * Math.PI) / 180;
+  const earthRadius = 6_371_000;
+  const dLat = toRad(lat - originLat);
+  const dLng = toRad(lng - originLng);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(originLat)) *
+      Math.cos(toRad(lat)) *
+      Math.sin(dLng / 2) ** 2;
+  return 2 * earthRadius * Math.asin(Math.sqrt(a)) <= radiusMeters;
+}
+
+function osmCacheKey(lat: number, lng: number, radius: number): string {
+  return `osm:${lat.toFixed(4)}:${lng.toFixed(4)}:${Math.round(radius)}`;
+}
+
+function mapOsmElement(el: any) {
+  const itemLat = el?.lat ?? el?.center?.lat;
+  const itemLng = el?.lon ?? el?.center?.lon;
+  if (
+    !isOsmElementType(el?.type) ||
+    typeof itemLat !== "number" ||
+    !Number.isFinite(itemLat) ||
+    typeof itemLng !== "number" ||
+    !Number.isFinite(itemLng)
+  ) {
+    return null;
+  }
+
+  const tags = el.tags ?? {};
+  const cleanTag = (value: unknown): string =>
+    typeof value === "string" ? sanitizeText(value).trim() : "";
+  const facilityId = osmFacilityId(el.type, el.id);
+  let name = cleanTag(tags.name) || cleanTag(tags["name:ja"]);
+  if (!name) {
+    const operator = cleanTag(tags.operator);
+    const description = cleanTag(tags.description);
+    name = operator
+      ? `${operator} 公衆トイレ`
+      : description
+        ? `公衆トイレ (${description})`
+        : `公衆便所 (OSM #${el.id})`;
+  } else if (!name.includes("トイレ") && !name.includes("便所")) {
+    name = `${name} 公衆トイレ`;
+  }
+
+  const isTheTokyoToilet = isTheTokyoToiletTags(tags);
+  const isWheelchair = tags.wheelchair === "yes";
+  const hasDiaper = tags.diaper === "yes" || tags.changing_table === "yes";
+  const hasWashlet = triFromYesNo(tags.washlet);
+  const isFree = triFromFee(tags.fee);
+  const isOpen24h = triFromOpen24h(tags.opening_hours);
+  const isOstomate = triFromYesNo(tags.ostomate);
+  let category:
+    | "park"
+    | "station"
+    | "convenience"
+    | "hotel"
+    | "department"
+    | "cafe" = "park";
+  if (
+    cleanTag(tags.operator).includes("JR") ||
+    cleanTag(tags.operator).includes("メトロ") ||
+    cleanTag(tags.operator).includes("地下鉄") ||
+    tags.location === "underground" ||
+    cleanTag(tags.description).includes("駅")
+  ) {
+    category = "station";
+  }
+
+  const estimate = estimateEquipmentScore({
+    category,
+    hasWashlet,
+    hasMultipurpose: isWheelchair
+      ? true
+      : tags.wheelchair === "no"
+        ? false
+        : null,
+    hasOstomate: isOstomate,
+    hasBabyTable: hasDiaper ? true : null,
+    toiletStyle:
+      /squat/.test(tags["toilets:position"] ?? "") &&
+      !/sit/.test(tags["toilets:position"] ?? "")
+        ? "japanese"
+        : null,
+    isFree,
+    isOpen24h,
+    landmark: isTheTokyoToilet,
+  });
+
+  return {
+    id: facilityId,
+    name,
+    facilityType: isTheTokyoToilet
+      ? "THE TOKYO TOILET (渋谷区デザイン公衆トイレ)"
+      : cleanTag(tags.operator)
+        ? `${cleanTag(tags.operator)} 管理公衆便所`
+        : "公衆便所 (OpenStreetMap実在登録)",
+    category,
+    dataSource: "osm" as const,
+    lat: itemLat,
+    lng: itemLng,
+    address:
+      cleanTag(tags["addr:full"]) ||
+      cleanTag(tags["addr:street"]) ||
+      "周辺道路・公園内",
+    cleanlinessGrade: estimate.grade,
+    cleanlinessScore: estimate.score,
+    equipmentGrade: estimate.grade,
+    equipmentScore: estimate.score,
+    subScores: {
+      cleanliness: estimate.score,
+      odor: estimate.score,
+      supplies: estimate.score,
+      comfort: estimate.score,
+    },
+    attributes: osmAttributesFromTags(tags),
+    openingHours: formatOsmOpeningHours(tags.opening_hours),
+    description: `OpenStreetMap (${el.type} ID: ${el.id}) に登録されている実在の公衆トイレです。${cleanTag(tags.description)}`,
+    reviewCount: 0,
+    reviews: [],
+    facilityNote: isTheTokyoToilet
+      ? "著名建築家が設計した渋谷区のデザイン公衆トイレ。"
+      : "OpenStreetMapに実在登録されている公衆トイレ。利用者の最新口コミ募集中。",
+    officialOpenDataId: facilityId,
+    estimateBasis: estimate.basis,
+    googleMapsUrl: `https://www.google.com/maps/search/?api=1&query=${itemLat},${itemLng}`,
+  };
+}
+
+app.get("/api/osm/toilets", async (c) => {
+  const latValue = parseQueryNumber(c.req.query("lat"));
+  const lngValue = parseQueryNumber(c.req.query("lng"));
+  const radiusValue = parseQueryNumber(c.req.query("radius"));
+  if (
+    (latValue !== undefined && !(latValue >= -90 && latValue <= 90)) ||
+    (lngValue !== undefined && !(lngValue >= -180 && lngValue <= 180)) ||
+    (radiusValue !== undefined && !(radiusValue >= 1 && radiusValue <= 3000))
+  ) {
+    return c.json(
+      {
+        error:
+          "invalid query parameter: lat (-90..90), lng (-180..180), radius (1..3000)",
+      },
+      400
+    );
+  }
+
+  const lat = latValue ?? 35.659;
+  const lng = lngValue ?? 139.7006;
+  const radius = radiusValue ?? 1500;
+  const key = osmCacheKey(lat, lng, radius);
+  const cached = c.env.OSM_CACHE ? await c.env.OSM_CACHE.get(key, "json") : null;
+  if (cached && typeof cached === "object") {
+    const payload = cached as { toilets?: Array<{ id?: string }> };
+    await c.get("store").registerExternalFacilities(
+      (payload.toilets ?? [])
+        .map((toilet) => toilet.id)
+        .filter((id): id is string => typeof id === "string")
+        .map((id) => ({ id, source: "osm" as const, origin: "live-osm" as const }))
+    );
+    return c.json(cached);
+  }
+
+  const liveRadius = Math.min(radius, 1200);
+  const query = `[out:json][timeout:5];(node["amenity"="toilets"](around:${liveRadius},${lat},${lng});way["amenity"="toilets"](around:${liveRadius},${lat},${lng}););out center 80;`;
+  const mirrors = [
+    "https://lz4.overpass-api.de/api/interpreter",
+    "https://z.overpass-api.de/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+  ];
+
+  let rawElements: any[] = [];
+  let upstreamSucceeded = false;
+  for (const mirror of mirrors) {
+    try {
+      const response = await fetch(mirror, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "kirei-toilet/1.0 (+https://github.com/neoenox/dokotoilet)",
+        },
+        body: "data=" + encodeURIComponent(query),
+        signal: AbortSignal.timeout(3800),
+      });
+      if (!response.ok) continue;
+      const contentLength = Number(response.headers.get("content-length") ?? "0");
+      if (contentLength > 8 * 1024 * 1024) continue;
+      const text = await response.text();
+      if (new TextEncoder().encode(text).byteLength > 8 * 1024 * 1024) continue;
+      const data = JSON.parse(text) as { elements?: unknown };
+      if (!Array.isArray(data.elements)) continue;
+      rawElements = data.elements;
+      upstreamSucceeded = true;
+      break;
+    } catch {
+      // Try the next mirror. No upstream error details are exposed to clients.
+    }
+  }
+
+  let source: "overpass" | "seed" | "none" = upstreamSucceeded
+    ? "overpass"
+    : "none";
+  if (!upstreamSucceeded) {
+    rawElements = REAL_OSM_SEED.filter((element: any) => {
+      const itemLat = element.lat ?? element.center?.lat;
+      const itemLng = element.lon ?? element.center?.lon;
+      return (
+        typeof itemLat === "number" &&
+        typeof itemLng === "number" &&
+        withinRadius(lat, lng, itemLat, itemLng, radius)
+      );
+    });
+    if (rawElements.length > 0) source = "seed";
+  }
+
+  const toilets = rawElements
+    .slice(0, 500)
+    .map(mapOsmElement)
+    .filter((toilet): toilet is NonNullable<ReturnType<typeof mapOsmElement>> =>
+      toilet !== null
+    )
+    .slice(0, 400);
+
+  await c.get("store").registerExternalFacilities(
+    toilets.map((toilet) => ({
+      id: toilet.id,
+      source: "osm" as const,
+      origin: "live-osm" as const,
+    }))
+  );
+
+  const payload = {
+    elements: rawElements.slice(0, 500),
+    toilets,
+    count: toilets.length,
+    source,
+    truncated: rawElements.length > 500 || toilets.length > 400,
+    timestamp: new Date().toISOString(),
+  };
+  if (c.env.OSM_CACHE && (upstreamSucceeded || toilets.length > 0)) {
+    await c.env.OSM_CACHE.put(key, JSON.stringify(payload), {
+      expirationTtl: 15 * 60,
+    });
+  }
+  return c.json(payload);
+});
 
 app.get("/api/community/toilets", async (c) => {
   const store = c.get("store");
