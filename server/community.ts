@@ -12,208 +12,34 @@ import crypto from "node:crypto";
 import type {
   ToiletFacility,
   ToiletReview,
-  TriState,
 } from "../src/types";
 import { gradeForScore, summarizeReviews } from "../src/lib/scoring";
 import { atomicWriteFile, withFileLock } from "./shared/persistence";
 import { normalizeDedupText, normalizeReportReason } from "./shared/dedup";
 import { sanitizeText } from "../src/lib/textPolicy";
-import {
-  TEXT_FIELDS,
-  validateFallbackText,
-  validateOptionalText,
-  validateRequiredText,
-} from "../src/lib/textPolicy";
 import type {
   AddReviewResult,
   CommunityRepository,
   ExternalFacilityObservation,
 } from "./communityRepository";
+import { canonicalizeExternalFacilityId } from "./externalFacilityRegistry";
 import {
-  canonicalizeExternalFacilityId,
-  isExternalFacilityIdFormat,
-} from "./externalFacilityRegistry";
-
-const CATEGORIES = [
-  "department",
-  "station",
-  "convenience",
-  "park",
-  "hotel",
-  "cafe",
-] as const;
-
-const TOILET_ID_RE = /^toilet-user-[A-Za-z0-9-]{1,64}$/;
-
-export interface ValidationResult<T> {
-  ok: boolean;
-  value?: T;
-  error?: string;
-}
-
-function isInt1to5(n: unknown): n is number {
-  return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 5;
-}
-
-function isShortString(v: unknown, max: number): v is string {
-  return typeof v === "string" && v.length <= max;
-}
-
-/** 外部施設ID形式の判定は shared モジュールに一本化（二重管理の廃止）。 */
-export function isExternalFacilityId(id: string): boolean {
-  return isExternalFacilityIdFormat(id);
-}
-
-export interface ToiletInput {
-  id: string;
-  name: string;
-  category: (typeof CATEGORIES)[number];
-  address: string;
-  floorInfo?: string;
-  /** Legacy field accepted for wire compatibility but never used for registration metadata. */
-  cleanlinessScore?: number;
-  description: string;
-  lat: number;
-  lng: number;
-  attributes: {
-    hasWashlet: TriState;
-    hasMultipurpose: TriState;
-    hasBabyTable: TriState;
-    hasPowderRoom: TriState;
-    isOpen24h: TriState;
-  };
-}
-
-export function validateToiletInput(body: any): ValidationResult<ToiletInput> {
-  if (!body || typeof body !== "object")
-    return { ok: false, error: "invalid body" };
-  if (typeof body.id !== "string" || !TOILET_ID_RE.test(body.id))
-    return { ok: false, error: "invalid id" };
-  if (!CATEGORIES.includes(body.category))
-    return { ok: false, error: "invalid category" };
-  if (typeof body.lat !== "number" || body.lat < -90 || body.lat > 90)
-    return { ok: false, error: "invalid lat" };
-  if (typeof body.lng !== "number" || body.lng < -180 || body.lng > 180)
-    return { ok: false, error: "invalid lng" };
-  if (
-    body.cleanlinessScore !== undefined &&
-    (typeof body.cleanlinessScore !== "number" ||
-      body.cleanlinessScore < 1 ||
-      body.cleanlinessScore > 5)
-  )
-    return { ok: false, error: "invalid cleanlinessScore" };
-
-  // テキスト欄は textPolicy の宣言的ポリシーで一括処理する。
-  // パイプライン（生入力の型/長さゲート → サニタイズ → 可視性 → URL検出）と
-  // 不可視のみの扱い（name は拒否、address/floorInfo/description は既定値へ
-  // フォールバック）は TEXT_FIELDS が宣言する。
-  const nameField = validateRequiredText(body.name, TEXT_FIELDS.toiletName);
-  if (nameField.ok === false) return nameField;
-  const addressField = validateFallbackText(body.address, TEXT_FIELDS.toiletAddress);
-  if (addressField.ok === false) return addressField;
-  const floorInfoField = validateOptionalText(body.floorInfo, TEXT_FIELDS.toiletFloorInfo);
-  if (floorInfoField.ok === false) return floorInfoField;
-  const descriptionField = validateFallbackText(body.description, TEXT_FIELDS.toiletDescription);
-  if (descriptionField.ok === false) return descriptionField;
-
-  const a = body.attributes;
-  if (a !== undefined && (a === null || typeof a !== "object" || Array.isArray(a)))
-    return { ok: false, error: "invalid attributes" };
-  for (const k of [
-    "hasWashlet",
-    "hasMultipurpose",
-    "hasBabyTable",
-    "hasPowderRoom",
-    "isOpen24h",
-  ] as const) {
-    if (
-      a !== undefined &&
-      a[k] !== undefined &&
-      a[k] !== null &&
-      typeof a[k] !== "boolean"
-    )
-      return { ok: false, error: `invalid attributes.${k}` };
-  }
-
-  return {
-    ok: true,
-    value: {
-      id: body.id,
-      name: nameField.value,
-      category: body.category,
-      address: addressField.value,
-      floorInfo: floorInfoField.value,
-      description: descriptionField.value,
-      lat: body.lat,
-      lng: body.lng,
-      attributes: {
-        hasWashlet: a?.hasWashlet ?? null,
-        hasMultipurpose: a?.hasMultipurpose ?? null,
-        hasBabyTable: a?.hasBabyTable ?? null,
-        hasPowderRoom: a?.hasPowderRoom ?? null,
-        isOpen24h: a?.isOpen24h ?? null,
-      },
-    },
-  };
-}
-
-export interface ReviewInput {
-  userName: string;
-  overallScore: number;
-  cleanlinessScore: number;
-  odorScore: number;
-  suppliesScore: number;
-  comment: string;
-}
-
-export function validateReviewInput(body: any): ValidationResult<ReviewInput> {
-  if (!body || typeof body !== "object")
-    return { ok: false, error: "invalid body" };
-  const r = body.review ?? body;
-  if (r.rating !== undefined && !isInt1to5(r.rating))
-    return { ok: false, error: "invalid rating" };
-  if (r.overallScore !== undefined && !isInt1to5(r.overallScore))
-    return { ok: false, error: "invalid overallScore" };
-  const overall = r.overallScore ?? r.rating;
-  if (!isInt1to5(overall))
-    return {
-      ok: false,
-      error: r.rating === undefined ? "invalid overallScore" : "invalid rating",
-    };
-  if (!isInt1to5(r.cleanlinessScore))
-    return { ok: false, error: "invalid cleanlinessScore" };
-  if (!isInt1to5(r.odorScore))
-    return { ok: false, error: "invalid odorScore" };
-  if (!isInt1to5(r.suppliesScore))
-    return { ok: false, error: "invalid suppliesScore" };
-  // テキスト欄は textPolicy の宣言的ポリシーで一括処理する。
-  const commentField = validateRequiredText(r.comment, TEXT_FIELDS.comment);
-  if (commentField.ok === false) return commentField;
-  const userNameField = validateFallbackText(r.userName, TEXT_FIELDS.userName);
-  if (userNameField.ok === false) return userNameField;
-
-  return {
-    ok: true,
-    value: {
-      userName: userNameField.value,
-      overallScore: overall,
-      cleanlinessScore: r.cleanlinessScore,
-      odorScore: r.odorScore,
-      suppliesScore: r.suppliesScore,
-      comment: commentField.value,
-    },
-  };
-}
-
-export function validateReportInput(
-  body: any
-): ValidationResult<{ reason: string }> {
-  if (!body || typeof body !== "object")
-    return { ok: false, error: "invalid body" };
-  const reasonField = validateRequiredText(body.reason, TEXT_FIELDS.reason);
-  if (reasonField.ok === false) return reasonField;
-  return { ok: true, value: { reason: reasonField.value } };
-}
+  isExternalFacilityId,
+  validateReportInput,
+  validateReviewInput,
+  validateToiletInput,
+} from "./communityValidation";
+export type {
+  ReviewInput,
+  ToiletInput,
+  ValidationResult,
+} from "./communityValidation";
+export {
+  isExternalFacilityId,
+  validateReportInput,
+  validateReviewInput,
+  validateToiletInput,
+} from "./communityValidation";
 
 export function hashIp(ip: string, salt: string): string {
   return crypto.createHash("sha256").update(`${salt}|${ip}`).digest("hex");
