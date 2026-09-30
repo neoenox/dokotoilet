@@ -19,6 +19,11 @@ NODE_ENV = "production"
 # database_name = "kirei-toilet-community"
 # database_id = "REPLACE_WITH_D1_ID"
 
+# Optional OSM proxy cache (create/provision separately; no Production ID is committed):
+# [[kv_namespaces]]
+# binding = "OSM_CACHE"
+# id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
 # Secrets (never commit values):
 #   bunx wrangler secret put COMMUNITY_SALT   # required: fixed salt for IP-hash vote/dedup guards
 #   bunx wrangler secret put ADMIN_TOKEN      # optional: enables admin moderation API
