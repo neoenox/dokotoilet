@@ -28,6 +28,7 @@ import {
   validateReportInput,
   validateReviewInput,
   validateToiletInput,
+  type ReviewInput,
 } from "./communityValidation";
 export type {
   ReviewInput,
