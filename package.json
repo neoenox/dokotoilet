@@ -9,7 +9,7 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --exclude \"worker/**/*.workerd.test.mjs\"",
     "smoke": "tsx scripts/smoke-check.ts",
     "test:worker": "vitest run --config vitest.worker.config.mjs"
   },
