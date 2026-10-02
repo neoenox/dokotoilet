@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "lint": "tsc --noEmit",
     "test": "vitest run",
-    "smoke": "tsx scripts/smoke-check.ts"
+    "smoke": "tsx scripts/smoke-check.ts",
+    "test:worker": "vitest run --config vitest.worker.config.mjs"
   },
   "dependencies": {
     "@google-cloud/firestore": "9.0.1",
@@ -42,6 +43,7 @@
     "typescript": "~5.8.2",
     "vite": "^6.2.3",
     "vite-plugin-pwa": "^1.3.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "@cloudflare/vitest-plugin": "^1.3.4"
   }
 }
