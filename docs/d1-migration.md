@@ -30,6 +30,13 @@ After creating a disposable local/staging D1 database, apply `worker/schema.sql`
 
 Run the repository test suite and the Worker route regression tests before any deployment.
 
+```bash
+bun run test
+bun run test:worker
+```
+
+`test:worker` runs under Cloudflare's current `@cloudflare/vitest-plugin`/workerd integration and exercises the local D1 and KV bindings.
+
 ## Production boundary
 
 This repository does **not** provision Production D1/KV, set `COMMUNITY_SALT` or `ADMIN_TOKEN`, change DNS, deploy Workers/Pages, or cut over live traffic automatically.
