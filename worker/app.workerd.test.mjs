@@ -9,7 +9,13 @@ beforeAll(async () => {
     .split("\n")
     .filter((line) => !line.trimStart().startsWith("--"))
     .join("\n");
-  await env.DB.exec(executableSchema);
+  const statements = executableSchema
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+  for (const statement of statements) {
+    await env.DB.prepare(statement).run();
+  }
 });
 
 describe("Workers runtime integration", () => {
