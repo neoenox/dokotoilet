@@ -82,6 +82,14 @@ async function main(): Promise<void> {
   const osmBad = await get('/api/osm/toilets?lat=999&lng=999&radius=99999');
   check('GET /api/osm/toilets (invalid) → 400', osmBad.status === 400, `got ${osmBad.status}`);
 
+  // 未登録の /api/* は SPAフォールバックに落ちず JSON 404 を返す
+  const unknownApi = await get('/api/definitely-unknown-path');
+  let unknownApiOk = unknownApi.status === 404;
+  try {
+    unknownApiOk &&= (JSON.parse(unknownApi.body) as { error?: unknown }).error != null;
+  } catch { unknownApiOk = false; }
+  check('GET /api/definitely-unknown-path → 404 JSON', unknownApiOk, `got ${unknownApi.status}: ${unknownApi.body.slice(0, 120)}`);
+
   const index = await get('/');
   check('GET / → 200', index.status === 200 && index.body.length > 0, `got ${index.status}`);
 

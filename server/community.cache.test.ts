@@ -216,3 +216,75 @@ describe("CommunityStore lock-free GET with mtime+size validation", () => {
     expect((await store.getExternalReviews())["汚染"]).toBeUndefined();
   });
 });
+
+describe("curation writes refresh the mtime+size cache", () => {
+  const reviewBody = {
+    userName: "t",
+    overallScore: 4,
+    cleanlinessScore: 4,
+    odorScore: 4,
+    suppliesScore: 4,
+    comment: "curation cache refresh",
+  } as any;
+
+  it("resolveReport reflects in subsequent reads without a cache miss", async () => {
+    const { store } = await makeStore();
+    await store.addToilet(toilet("toilet-user-a"));
+    const added = await store.addReview("toilet-user-a", reviewBody, "ip-a");
+    expect(added.toilet?.reviews?.[0]?.id).toBeTruthy();
+    const reviewId = added.toilet!.reviews[0].id as string;
+    await store.addReport("toilet-user-a", reviewId, "spam");
+
+    const reports = await store.listReports();
+    expect(reports).toHaveLength(1);
+    const reportId = reports[0].id;
+
+    // resolveReport 前にキャッシュをウォームアップ（旧実装の検証経路を再現）
+    expect((await store.listReports())[0].status).toBe("open");
+
+    const r = await store.resolveReport(reportId, "ok");
+    expect(r.found).toBe(true);
+
+    // refreshCacheAfterWrite 相当の整合: 次の読み取りで resolved が見える
+    expect((await store.listReports())[0].status).toBe("resolved");
+    expect((await store.load()).reports[0].status).toBe("resolved");
+  });
+
+  it("deleteReview reflects in subsequent reads without a cache miss", async () => {
+    const { store } = await makeStore();
+    await store.addToilet(toilet("toilet-user-a"));
+    const added = await store.addReview("toilet-user-a", reviewBody, "ip-a");
+    const reviewId = added.toilet!.reviews[0].id as string;
+    expect((await store.getToilets())[0].reviewCount).toBe(1);
+
+    const r = await store.deleteReview(reviewId, "admin delete");
+    expect(r.found).toBe(true);
+    expect(r.kind).toBe("community");
+
+    // 削除がキャッシュ経由の読み取りでも見えること（レビュー・スコア・通報状態）
+    const after = (await store.getToilets())[0];
+    expect(after.reviewCount).toBe(0);
+    expect(after.reviews).toEqual([]);
+    expect((await store.load()).helpfulVotes[reviewId]).toBeUndefined();
+  });
+
+  it("deleteReview on an external review reflects in subsequent reads", async () => {
+    const { store } = await makeStore();
+    await store.registerExternalFacilities([
+      { id: "osm-消したい", source: "osm", origin: "restore" },
+    ]);
+    const added = await store.addReview("osm-消したい", reviewBody, "ip-a");
+    const reviewId = added.reviews?.[0]?.id;
+    expect(reviewId).toBeTruthy();
+    expect(Object.values(await store.getExternalReviews())[0]).toHaveLength(1);
+
+    const r = await store.deleteReview(reviewId!, "admin delete");
+    expect(r.found).toBe(true);
+    expect(r.kind).toBe("external");
+
+    const external = await store.getExternalReviews();
+    expect(external["osm-消したい"]).toEqual([]);
+    // レビューが0件でも外部施設のキーは保持される（再投稿可能維持）
+    expect(Object.keys(external)).toContain("osm-消したい");
+  });
+});
