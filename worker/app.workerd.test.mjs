@@ -5,7 +5,11 @@ import app from "./app";
 import schema from "./schema.sql?raw";
 
 beforeAll(async () => {
-  await env.DB.exec(schema);
+  const executableSchema = schema
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n");
+  await env.DB.exec(executableSchema);
 });
 
 describe("Workers runtime integration", () => {
