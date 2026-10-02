@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [main]
@@ -15,11 +18,16 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-      - uses: actions/upload-artifact@v4
-        with:
-          name: worker-runtime-bun-lock
-          path: bun.lock
-          if-no-files-found: error
+      - name: Commit regenerated Bun lockfile
+        shell: bash
+        run: |
+          if ! git diff --quiet -- bun.lock; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add bun.lock
+            git commit -m "chore: update Bun lockfile for workerd tests"
+            git push origin "HEAD:${GITHUB_HEAD_REF}"
+          fi
       # B: data/community.json はgit運用の正本。untrackedに戻っていないか監視する
       - run: git ls-files data/ | grep -q "data/community.json"
       - run: bun run lint
