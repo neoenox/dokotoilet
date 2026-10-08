@@ -60,4 +60,43 @@ describe("production rate limiting and bounded request reads", () => {
     }, env);
     expect(response.status).toBe(413);
   });
+
+  test("API rate limiter denial returns 429 before hitting D1", async () => {
+    const production = {
+      ...env, NODE_ENV: "production",
+      API_RATE_LIMITER: { limit: async () => ({ success: false }) },
+    };
+    const response = await app.request("https://example.test/api/community/toilets", {}, production);
+    expect(response.status).toBe(429);
+  });
+
+  test("write limiter denial returns 429 before reading the body", async () => {
+    const production = {
+      ...env, NODE_ENV: "production",
+      API_RATE_LIMITER: { limit: async () => ({ success: true }) },
+      WRITE_RATE_LIMITER: { limit: async () => ({ success: false }) },
+    };
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: "x".repeat(100 * 1024 + 1),
+    }, production);
+    expect(response.status).toBe(429);
+  });
+
+  test("oversized Content-Length rejects before consuming body", async () => {
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": "102401" },
+      body: "{}",
+    }, env);
+    expect(response.status).toBe(413);
+  });
+
+  test("valid short JSON still reaches normal validation", async () => {
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: "{}",
+    }, env);
+    expect(response.status).toBe(400);
+  });
 });
