@@ -32,3 +32,32 @@ describe("Workers/Hono route surface", () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe("production rate limiting and bounded request reads", () => {
+  test("fails closed without API limiter while health stays diagnosable", async () => {
+    const production = { ...env, NODE_ENV: "production" };
+    const rejected = await app.request("https://example.test/api/community/toilets", {}, production);
+    expect(rejected.status).toBe(503);
+    const health = await app.request("https://example.test/api/health", {}, production);
+    expect(health.status).toBe(200);
+  });
+
+  test("rejects production writes when WRITE_RATE_LIMITER is missing", async () => {
+    const production = {
+      ...env, NODE_ENV: "production",
+      API_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    };
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    }, production);
+    expect(response.status).toBe(503);
+  });
+
+  test("enforces a request body limit before JSON parsing", async () => {
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: "x".repeat(100 * 1024 + 1),
+    }, env);
+    expect(response.status).toBe(413);
+  });
+});
