@@ -2,6 +2,8 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { env } from "cloudflare:workers";
 
 import app from "./app";
+import { D1CommunityRepository } from "./d1CommunityRepository";
+import { TERMINAL_STATIONS_SEED } from "../src/data/terminalStationsSeed";
 import schema from "./schema.sql?raw";
 
 beforeAll(async () => {
@@ -62,6 +64,18 @@ describe("curated manual external facilities", () => {
     const body = await response.json();
     expect(body.facilityId).toBe("terminal-shinjuku-newoman");
     expect(body.reviewCount).toBeGreaterThan(0);
+  });
+
+  test("all 14 shipped manual seeds are known without prior D1 registration", async () => {
+    const repository = new D1CommunityRepository(env.DB);
+    const known = await repository.listKnownExternalFacilityIds();
+    expect(TERMINAL_STATIONS_SEED).toHaveLength(14);
+    for (const facility of TERMINAL_STATIONS_SEED) {
+      expect(await repository.isKnownExternalFacility(facility.id)).toBe(true);
+      expect(known).toContain(facility.id);
+    }
+    expect(await repository.isKnownExternalFacility("terminal-fabricated-1")).toBe(false);
+    expect(known).not.toContain("terminal-fabricated-1");
   });
 
   test("continues to reject fabricated terminal facility IDs", async () => {
