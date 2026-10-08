@@ -1,6 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 
 import { canonicalizeExternalFacilityId } from "../src/lib/facilityIds";
+import { TERMINAL_STATIONS_SEED } from "../src/data/terminalStationsSeed";
 import { summarizeReviews } from "../src/lib/scoring";
 import type { ToiletFacility, ToiletReview } from "../src/types";
 import type {
@@ -40,7 +41,9 @@ type ReportRow = {
   admin_note: string | null;
 };
 
-const EXTERNAL_ID_RE = /^(osm|google|od)-(?:[\p{L}\p{N}_-]){1,80}$/u;
+// Only curated static IDs are accepted; arbitrary terminal-* IDs must remain 404.
+const CURATED_MANUAL_IDS = new Set(TERMINAL_STATIONS_SEED.map((item) => item.id));
+const EXTERNAL_ID_RE = /^(osm|google|od|terminal)-(?:[\p{L}\p{N}_-]){1,80}$/u;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function normalizeDedupText(value: string): string {
@@ -213,7 +216,12 @@ export class D1CommunityRepository implements CommunityRepository {
       .first<{ found: number }>();
     if (community) return { id: facilityId, kind: "community" };
 
-    if (!EXTERNAL_ID_RE.test(facilityId)) return null;
+    // Reviewed, shipped manual facilities need to accept their FIRST review.
+    // They may not appear in external_facilities (no historical reviews to migrate).
+    if (CURATED_MANUAL_IDS.has(facilityId)) {
+      return { id: facilityId, kind: "external" };
+    }
+    if (!EXTERNAL_ID_RE.test(facilityId) || facilityId.startsWith("terminal-")) return null;
     const external = await this.db
       .prepare("SELECT 1 AS found FROM external_facilities WHERE facility_id = ?")
       .bind(facilityId)
@@ -573,7 +581,8 @@ export class D1CommunityRepository implements CommunityRepository {
     const now = new Date().toISOString();
     const statements = facilities.flatMap((facility) => {
       const facilityId = canonicalizeExternalFacilityId(facility.id);
-      if (!EXTERNAL_ID_RE.test(facilityId)) return [];
+      if (!EXTERNAL_ID_RE.test(facilityId) ||
+          (facilityId.startsWith("terminal-") && !CURATED_MANUAL_IDS.has(facilityId))) return [];
       return [
         this.db
           .prepare(
@@ -599,7 +608,8 @@ export class D1CommunityRepository implements CommunityRepository {
 
   async isKnownExternalFacility(rawFacilityId: string): Promise<boolean> {
     const facilityId = canonicalizeExternalFacilityId(rawFacilityId);
-    if (!EXTERNAL_ID_RE.test(facilityId)) return false;
+    if (CURATED_MANUAL_IDS.has(facilityId)) return true;
+    if (!EXTERNAL_ID_RE.test(facilityId) || facilityId.startsWith("terminal-")) return false;
     const row = await this.db
       .prepare("SELECT 1 AS found FROM external_facilities WHERE facility_id = ?")
       .bind(facilityId)
@@ -613,6 +623,6 @@ export class D1CommunityRepository implements CommunityRepository {
         "SELECT facility_id FROM external_facilities ORDER BY facility_id ASC"
       )
       .all<{ facility_id: string }>();
-    return result.results.map((row) => row.facility_id);
+    return [...new Set([...CURATED_MANUAL_IDS, ...result.results.map((row) => row.facility_id)])].sort();
   }
 }
