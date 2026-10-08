@@ -35,6 +35,7 @@ interface RateLimitBinding {
 export interface WorkerEnv {
   DB: D1Database;
   COMMUNITY_SALT: string;
+  NODE_ENV?: string;
   ADMIN_TOKEN?: string;
   API_RATE_LIMITER?: RateLimitBinding;
   WRITE_RATE_LIMITER?: RateLimitBinding;
@@ -74,12 +75,39 @@ function safeEqual(left: string, right: string): boolean {
   return mismatch === 0;
 }
 
+const MAX_BODY_BYTES = 100 * 1024;
+
 async function readJson(request: Request): Promise<unknown> {
-  const raw = await request.text();
-  if (encoder.encode(raw).byteLength > 100 * 1024) {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number.isFinite(Number(declared)) && Number(declared) > MAX_BODY_BYTES) {
     throw new RequestBodyError(413, "request too large");
   }
+  const reader = request.body?.getReader();
+  if (!reader) return {};
+  const chunks: Uint8Array[] = [];
+  let size = 0;
   try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_BODY_BYTES) {
+        await reader.cancel();
+        throw new RequestBodyError(413, "request too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    const raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     return raw.length === 0 ? {} : JSON.parse(raw);
   } catch {
     throw new RequestBodyError(400, "invalid json");
@@ -97,9 +125,11 @@ class RequestBodyError extends Error {
 
 async function allowed(
   binding: RateLimitBinding | undefined,
-  key: string
+  key: string,
+  production: boolean
 ): Promise<boolean> {
-  if (!binding) return true;
+  // Local tests/dev can run without Cloudflare bindings. Production MUST fail closed.
+  if (!binding) return !production;
   return (await binding.limit({ key })).success;
 }
 
@@ -108,13 +138,17 @@ function externalId(raw: string): string {
 }
 
 app.use("/api/*", async (c, next) => {
-  if (
-    !(await allowed(
-      c.env.API_RATE_LIMITER,
-      `${c.req.method}:${new URL(c.req.url).pathname}`
-    ))
-  ) {
-    return c.json({ error: "too many requests" }, 429);
+  const path = new URL(c.req.url).pathname;
+  // Keep the diagnostic endpoint reachable if production bindings are missing.
+  if (path !== "/api/health") {
+    if (c.env.NODE_ENV === "production" && !c.env.API_RATE_LIMITER) {
+      return c.json({ error: "rate limiter unavailable" }, 503);
+    }
+    const actor = await requestActor(c.req.raw, c.env.COMMUNITY_SALT);
+    if (!(await allowed(c.env.API_RATE_LIMITER, `${actor}:${c.req.method}:${path}`,
+      c.env.NODE_ENV === "production"))) {
+      return c.json({ error: "too many requests" }, 429);
+    }
   }
   c.set("store", new D1CommunityRepository(c.env.DB));
   await next();
@@ -396,7 +430,10 @@ app.get("/api/community/toilets", async (c) => {
 
 app.post("/api/community/toilets", async (c) => {
   const actor = await requestActor(c.req.raw, c.env.COMMUNITY_SALT);
-  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `toilet:${actor}`))) {
+  if (c.env.NODE_ENV === "production" && !c.env.WRITE_RATE_LIMITER) {
+    return c.json({ error: "rate limiter unavailable" }, 503);
+  }
+  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `toilet:${actor}`, c.env.NODE_ENV === "production"))) {
     return c.json({ error: "too many requests" }, 429);
   }
   const validated = validateToiletInput(await readJson(c.req.raw));
@@ -465,7 +502,10 @@ app.post("/api/community/toilets", async (c) => {
 
 app.post("/api/community/toilets/:id/reviews", async (c) => {
   const actor = await requestActor(c.req.raw, c.env.COMMUNITY_SALT);
-  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `review:${actor}`))) {
+  if (c.env.NODE_ENV === "production" && !c.env.WRITE_RATE_LIMITER) {
+    return c.json({ error: "rate limiter unavailable" }, 503);
+  }
+  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `review:${actor}`, c.env.NODE_ENV === "production"))) {
     return c.json({ error: "too many requests" }, 429);
   }
   const validated = validateReviewInput(await readJson(c.req.raw));
@@ -497,7 +537,10 @@ app.post("/api/community/toilets/:id/reviews", async (c) => {
 
 app.post("/api/community/reviews/:reviewId/helpful", async (c) => {
   const actor = await requestActor(c.req.raw, c.env.COMMUNITY_SALT);
-  if (!(await allowed(c.env.VOTE_RATE_LIMITER, `vote:${actor}`))) {
+  if (c.env.NODE_ENV === "production" && !c.env.VOTE_RATE_LIMITER) {
+    return c.json({ error: "rate limiter unavailable" }, 503);
+  }
+  if (!(await allowed(c.env.VOTE_RATE_LIMITER, `vote:${actor}`, c.env.NODE_ENV === "production"))) {
     return c.json({ error: "too many requests" }, 429);
   }
   const result = await c
@@ -512,7 +555,10 @@ app.post("/api/community/reviews/:reviewId/helpful", async (c) => {
 
 app.post("/api/community/reviews/:reviewId/report", async (c) => {
   const actor = await requestActor(c.req.raw, c.env.COMMUNITY_SALT);
-  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `report:${actor}`))) {
+  if (c.env.NODE_ENV === "production" && !c.env.WRITE_RATE_LIMITER) {
+    return c.json({ error: "rate limiter unavailable" }, 503);
+  }
+  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `report:${actor}`, c.env.NODE_ENV === "production"))) {
     return c.json({ error: "too many requests" }, 429);
   }
   const body = await readJson(c.req.raw);
@@ -575,7 +621,10 @@ app.post("/api/community/admin/reports/:id/resolve", async (c) => {
   const denied = await requireAdmin(c);
   if (denied) return denied;
   const actor = await requestActor(c.req.raw, c.env.COMMUNITY_SALT);
-  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `admin:${actor}`))) {
+  if (c.env.NODE_ENV === "production" && !c.env.WRITE_RATE_LIMITER) {
+    return c.json({ error: "rate limiter unavailable" }, 503);
+  }
+  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `admin:${actor}`, c.env.NODE_ENV === "production"))) {
     return c.json({ error: "too many requests" }, 429);
   }
   const body = (await readJson(c.req.raw)) as {
@@ -597,7 +646,10 @@ app.delete("/api/community/admin/reviews/:reviewId", async (c) => {
   const denied = await requireAdmin(c);
   if (denied) return denied;
   const actor = await requestActor(c.req.raw, c.env.COMMUNITY_SALT);
-  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `admin:${actor}`))) {
+  if (c.env.NODE_ENV === "production" && !c.env.WRITE_RATE_LIMITER) {
+    return c.json({ error: "rate limiter unavailable" }, 503);
+  }
+  if (!(await allowed(c.env.WRITE_RATE_LIMITER, `admin:${actor}`, c.env.NODE_ENV === "production"))) {
     return c.json({ error: "too many requests" }, 429);
   }
   const body = (await readJson(c.req.raw)) as { reason?: unknown };

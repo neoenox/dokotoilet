@@ -32,3 +32,71 @@ describe("Workers/Hono route surface", () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe("production rate limiting and bounded request reads", () => {
+  test("fails closed without API limiter while health stays diagnosable", async () => {
+    const production = { ...env, NODE_ENV: "production" };
+    const rejected = await app.request("https://example.test/api/community/toilets", {}, production);
+    expect(rejected.status).toBe(503);
+    const health = await app.request("https://example.test/api/health", {}, production);
+    expect(health.status).toBe(200);
+  });
+
+  test("rejects production writes when WRITE_RATE_LIMITER is missing", async () => {
+    const production = {
+      ...env, NODE_ENV: "production",
+      API_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    };
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    }, production);
+    expect(response.status).toBe(503);
+  });
+
+  test("enforces a request body limit before JSON parsing", async () => {
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: "x".repeat(100 * 1024 + 1),
+    }, env);
+    expect(response.status).toBe(413);
+  });
+
+  test("API rate limiter denial returns 429 before hitting D1", async () => {
+    const production = {
+      ...env, NODE_ENV: "production",
+      API_RATE_LIMITER: { limit: async () => ({ success: false }) },
+    };
+    const response = await app.request("https://example.test/api/community/toilets", {}, production);
+    expect(response.status).toBe(429);
+  });
+
+  test("write limiter denial returns 429 before reading the body", async () => {
+    const production = {
+      ...env, NODE_ENV: "production",
+      API_RATE_LIMITER: { limit: async () => ({ success: true }) },
+      WRITE_RATE_LIMITER: { limit: async () => ({ success: false }) },
+    };
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: "x".repeat(100 * 1024 + 1),
+    }, production);
+    expect(response.status).toBe(429);
+  });
+
+  test("oversized Content-Length rejects before consuming body", async () => {
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": "102401" },
+      body: "{}",
+    }, env);
+    expect(response.status).toBe(413);
+  });
+
+  test("valid short JSON still reaches normal validation", async () => {
+    const response = await app.request("https://example.test/api/community/toilets", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: "{}",
+    }, env);
+    expect(response.status).toBe(400);
+  });
+});
