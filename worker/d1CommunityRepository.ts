@@ -136,6 +136,14 @@ export class D1CommunityRepository implements CommunityRepository {
   }
 
   async getToilets(): Promise<ToiletFacility[]> {
+    const result = await this.getToiletsWithIntegrity();
+    return result.toilets;
+  }
+
+  async getToiletsWithIntegrity(): Promise<{
+    toilets: ToiletFacility[];
+    malformedCount: number;
+  }> {
     const facilities = await this.db
       .prepare(
         `SELECT facility_id, data_json
@@ -150,14 +158,23 @@ export class D1CommunityRepository implements CommunityRepository {
       list.push(rowToReview(row));
       grouped.set(row.facility_id, list);
     }
-    return facilities.results.flatMap((row) => {
+
+    let malformedCount = 0;
+    const toilets = facilities.results.flatMap((row) => {
       try {
         const base = JSON.parse(row.data_json) as ToiletFacility;
         return [publicFacility(base, grouped.get(row.facility_id) ?? [])];
-      } catch {
+      } catch (error) {
+        malformedCount += 1;
+        // Do not log user content or the raw JSON payload.
+        console.error("[worker] malformed community facility JSON", {
+          facilityId: row.facility_id,
+          errorName: error instanceof Error ? error.name : "unknown",
+        });
         return [];
       }
     });
+    return { toilets, malformedCount };
   }
 
   async getExternalReviews(): Promise<Record<string, ToiletReview[]>> {
