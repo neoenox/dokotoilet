@@ -388,8 +388,15 @@ app.get("/api/osm/toilets", async (c) => {
 
 app.get("/api/community/toilets", async (c) => {
   const store = c.get("store");
+  const { toilets, malformedCount } = await store.getToiletsWithIntegrity();
+  if (malformedCount > 0) {
+    c.header(
+      "X-Data-Integrity-Warning",
+      "malformed-community-facility-records"
+    );
+  }
   return c.json({
-    toilets: await store.getToilets(),
+    toilets,
     externalReviews: await store.getExternalReviews(),
   });
 });
