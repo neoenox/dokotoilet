@@ -161,9 +161,9 @@ export class D1CommunityRepository implements CommunityRepository {
 
     let malformedCount = 0;
     const toilets = facilities.results.flatMap((row) => {
+      let base: ToiletFacility;
       try {
-        const base = JSON.parse(row.data_json) as ToiletFacility;
-        return [publicFacility(base, grouped.get(row.facility_id) ?? [])];
+        base = JSON.parse(row.data_json) as ToiletFacility;
       } catch (error) {
         malformedCount += 1;
         // Do not log user content or the raw JSON payload.
@@ -173,6 +173,7 @@ export class D1CommunityRepository implements CommunityRepository {
         });
         return [];
       }
+      return [publicFacility(base, grouped.get(row.facility_id) ?? [])];
     });
     return { toilets, malformedCount };
   }
