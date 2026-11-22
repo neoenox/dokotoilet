@@ -2,6 +2,8 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { env } from "cloudflare:workers";
 
 import app from "./app";
+import { D1CommunityRepository } from "./d1CommunityRepository";
+import { TERMINAL_STATIONS_SEED } from "../src/data/terminalStationsSeed";
 import schema from "./schema.sql?raw";
 
 beforeAll(async () => {
@@ -43,68 +45,45 @@ describe("Workers runtime integration", () => {
   });
 });
 
-describe("community D1 data-integrity reporting", () => {
-  test("keeps valid facilities visible and warns when a persisted row has malformed JSON", async () => {
-    const validId = "toilet-user-integrity-valid";
-    const malformedId = "toilet-user-integrity-malformed";
-    const createdAt = "2026-11-13T00:00:00.000Z";
-
-    const insert = env.DB.prepare(
-      `INSERT OR REPLACE INTO community_toilets
-         (facility_id, name, category, lat, lng, data_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+describe("curated manual external facilities", () => {
+  const review = {
+    userName: "workerd-test",
+    overallScore: 4,
+    cleanlinessScore: 4,
+    odorScore: 4,
+    suppliesScore: 4,
+    comment: "初回レビューの回帰試験",
+  };
+  test("accepts the first review for shipped static terminal IDs", async () => {
+    const response = await app.request(
+      "https://example.test/api/community/toilets/terminal-shinjuku-newoman/reviews",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(review) },
+      env
     );
-    await insert
-      .bind(
-        validId,
-        "valid integrity fixture",
-        "park",
-        35,
-        139,
-        JSON.stringify({ id: validId, equipmentScore: 3, equipmentGrade: "B" }),
-        createdAt
-      )
-      .run();
-    await insert
-      .bind(
-        malformedId,
-        "malformed integrity fixture",
-        "park",
-        35,
-        139,
-        "{invalid-json",
-        createdAt
-      )
-      .run();
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body.facilityId).toBe("terminal-shinjuku-newoman");
+    expect(body.reviewCount).toBeGreaterThan(0);
+  });
 
-    try {
-      const response = await app.request(
-        "https://example.test/api/community/toilets",
-        {},
-        env
-      );
-      expect(response.status).toBe(200);
-      expect(response.headers.get("X-Data-Integrity-Warning")).toBe(
-        "malformed-community-facility-records"
-      );
-
-      const body = await response.json();
-      const ids = body.toilets.map((toilet) => toilet.id);
-      expect(ids).toContain(validId);
-      expect(ids).not.toContain(malformedId);
-
-      const stored = await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM community_toilets WHERE facility_id IN (?, ?)"
-      )
-        .bind(validId, malformedId)
-        .first();
-      expect(stored?.count).toBe(2);
-    } finally {
-      await env.DB.prepare(
-        "DELETE FROM community_toilets WHERE facility_id IN (?, ?)"
-      )
-        .bind(validId, malformedId)
-        .run();
+  test("all 14 shipped manual seeds are known without prior D1 registration", async () => {
+    const repository = new D1CommunityRepository(env.DB);
+    const known = await repository.listKnownExternalFacilityIds();
+    expect(TERMINAL_STATIONS_SEED).toHaveLength(14);
+    for (const facility of TERMINAL_STATIONS_SEED) {
+      expect(await repository.isKnownExternalFacility(facility.id)).toBe(true);
+      expect(known).toContain(facility.id);
     }
+    expect(await repository.isKnownExternalFacility("terminal-fabricated-1")).toBe(false);
+    expect(known).not.toContain("terminal-fabricated-1");
+  });
+
+  test("continues to reject fabricated terminal facility IDs", async () => {
+    const response = await app.request(
+      "https://example.test/api/community/toilets/terminal-made-up-zzzzz/reviews",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(review) },
+      env
+    );
+    expect(response.status).toBe(404);
   });
 });
