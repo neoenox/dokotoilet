@@ -14,6 +14,29 @@ bucket = "dist"
 [vars]
 NODE_ENV = "production"
 
+# Each namespace_id must be unique in the Cloudflare account; verify before deployment.
+# Limits are per Cloudflare location (not globally exact).
+[[ratelimits]]
+name = "API_RATE_LIMITER"
+namespace_id = "34010801"
+[ratelimits.simple]
+limit = 120
+period = 60
+
+[[ratelimits]]
+name = "WRITE_RATE_LIMITER"
+namespace_id = "34010802"
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[ratelimits]]
+name = "VOTE_RATE_LIMITER"
+namespace_id = "34010803"
+[ratelimits.simple]
+limit = 60
+period = 60
+
 # [[d1_databases]]
 # binding = "DB"
 # database_name = "kirei-toilet-community"
